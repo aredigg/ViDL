@@ -1,0 +1,11 @@
+[project]
+name = "ViDL"
+version = "1.0.0"
+authors = [
+    {
+        name = "aredigg",
+        email = ""
+    }
+]
+description = "A pretty CLI frontend to yt-dlp"
+readme = "README.md"

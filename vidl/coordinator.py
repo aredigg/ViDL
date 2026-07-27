@@ -38,6 +38,7 @@ class Coordinator:
                     while slot is None:
                         slot = next((s for s in self.__slots if s.ready()), None)
                         sleep(1)
+                    slot.process(channel)
             except KeyboardInterrupt:
                 self.__running = False
         return 0

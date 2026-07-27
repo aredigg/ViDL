@@ -8,7 +8,7 @@ class Slot:
         self.__index = index
         self.__view_queue = view_queue
         self.__channel = None
-        self.__ready = True
+        self.__ready = False
         self.__queue = Queue()
         self.__halt_event = Event()
         self.__thread = Thread(target=self.__run, name=f"Slot-{index}")
@@ -24,9 +24,12 @@ class Slot:
         return self.__channel
 
     def __run(self):
+        self.__ready = True
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
+            self.__ready = False
             print(channel)
+            self.__ready = True
 
     def halt(self):
         self.__halt_event.set()

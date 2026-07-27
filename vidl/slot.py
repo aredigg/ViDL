@@ -14,6 +14,8 @@ class Slot:
         self.__thread.start()
 
     def process(self, channel):
+        self.__ready = False
+        self.__channel = channel
         self.__queue.put(channel)
 
     def ready(self):
@@ -26,11 +28,14 @@ class Slot:
         self.__ready = True
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
-            self.__ready = False
-            print(channel)
-            self.__ready = True
+            if channel is not None:
+                channel.download(self.__index)
+                self.__channel = None
+                self.__ready = True
 
     def halt(self):
+        self.__ready = False
+        self.__queue.put(None)
         self.__halt_event.set()
 
     def join(self):

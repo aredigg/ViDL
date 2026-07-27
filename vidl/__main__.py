@@ -17,6 +17,9 @@ def main(args) -> int:
         Config.settings["Paths"]["temporary"] = t
         coord = Coordinator()
         status = coord.run()
+        if coord.error() is not None:
+            print(f"ERROR: {coord.error()}", file=sys.stderr)
+    print("Done.")
     return status
 
 

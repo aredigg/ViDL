@@ -3,7 +3,6 @@ from threading import Event, Thread
 
 
 class Slot:
-
     def __init__(self, index, view_queue) -> None:
         self.__index = index
         self.__view_queue = view_queue

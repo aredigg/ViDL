@@ -1,8 +1,8 @@
 import sys
 import tempfile
 
-from .coordinator import Coordinator
 from .config import Config
+from .coordinator import Coordinator
 
 
 def main(args) -> int:
@@ -18,6 +18,7 @@ def main(args) -> int:
         coord = Coordinator()
         status = coord.run()
     return status
+
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))

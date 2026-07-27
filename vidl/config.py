@@ -2,28 +2,16 @@
 
 import os
 
+
 class Config:
     path = os.path.abspath(os.path.curdir)
     ini = "config.ini"
 
     settings = {
-        "Channels": {
-            "file_name": "channels",
-            "slots": 0
-        },
-        "Paths": {
-            "config": None,
-            "output": None,
-            "temporary": None
-        },
-        "Download": {
-            "minimum_resolution": 0,
-            "minimum_duration": 0
-        },
-        "Debug": {
-            "file_name": "debug",
-            "active": False
-        }
+        "Channels": {"file_name": "channels", "slots": 0},
+        "Paths": {"config": None, "output": None, "temporary": None},
+        "Download": {"minimum_resolution": 0, "minimum_duration": 0},
+        "Debug": {"file_name": "debug", "active": False},
     }
 
     ydl_settings = {
@@ -43,16 +31,20 @@ class Config:
         "writedescription": False,
         "writeinfojson": False,
         "hls_prefer_native": True,
-        "external_downloader_args": {"ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"]},
+        "external_downloader_args": {
+            "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"]
+        },
         "downloader_args": {
             "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"],
             "ffmpeg_i": ["-rw_timeout", "30000000"],
         },
-        "postprocessor_args": {"ffmpeg": ["-loglevel", "error", "-hide_banner", "-nostats"]},
+        "postprocessor_args": {
+            "ffmpeg": ["-loglevel", "error", "-hide_banner", "-nostats"]
+        },
     }
 
     @staticmethod
-    def initialize(config_ini = ini):
+    def initialize(config_ini=ini):
         Config.ini = config_ini
         Config.settings["Paths"]["config"] = Config.path
 
@@ -96,7 +88,7 @@ class Config:
         if value is None or value == "None" or value == "":
             return None
         # Quoted string
-        if value.startswith("\"") and value.endswith("\""):
+        if value.startswith('"') and value.endswith('"'):
             return str(value[1:-1])
         # Integer
         try:

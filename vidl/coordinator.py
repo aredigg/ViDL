@@ -1,12 +1,12 @@
 from queue import Queue
 from time import sleep
 
-from .slot import Slot
 from .channel import Channel
 from .config import Config
+from .slot import Slot
+
 
 class Coordinator:
-
     def __init__(self) -> None:
         self.__running = True
         self.__view_queue = Queue()
@@ -17,17 +17,18 @@ class Coordinator:
                 self.__channels = [
                     Channel(*p)
                     for line in f
-                    if (s := line.strip()) and (p := s.split(";"))
-                    and not s.startswith("#") and len(p) >= Channel.header_len
+                    if (s := line.strip())
+                    and (p := s.split(";"))
+                    and not s.startswith("#")
+                    and len(p) >= Channel.header_len
                 ]
         except FileNotFoundError as e:
             print(f"File not found error {e}")
             self.__running = False
-        number_of_slots = min(max(1, Config.settings["Channels"]["slots"]), len(self.__channels))
-        self.__slots = [
-            Slot(i, self.__view_queue) for i in range(number_of_slots)
-        ]
-
+        number_of_slots = min(
+            max(1, Config.settings["Channels"]["slots"]), len(self.__channels)
+        )
+        self.__slots = [Slot(i, self.__view_queue) for i in range(number_of_slots)]
 
     def run(self):
         while self.__running:
@@ -47,7 +48,4 @@ class Coordinator:
         if not self.__channels:
             return None
 
-        return min(
-            self.__channels,
-            key=lambda channel: channel.get_last_date()
-        )
+        return min(self.__channels, key=lambda channel: channel.get_last_date())

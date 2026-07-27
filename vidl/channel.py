@@ -7,7 +7,7 @@ class Channel:
         "URL",
         "Last Download",
         "Last Attempt",
-        "Last Error Message"
+        "Last Error Message",
     ]
     header_len = len(__header_columns)
     header = ";".join(__header_columns) + "\n"

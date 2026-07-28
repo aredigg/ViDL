@@ -49,6 +49,18 @@ class Item:
     speed: float
     _percent: float
 
+    def valid_format(self):
+        if minimum_resolution := Config.settings["Downloads"]["minimum_resolution"]:
+            return self.height == 0 or self.height >= minimum_resolution
+        return True
+
+    def within_cutoff(self, channel):
+        if cutoff := Config.settings["Downloads"]["playlist_cutoff"]:
+            return cutoff == 0 or self.epoch >= channel.set_epoch_cutoff(
+                cutoff * 86_400
+            )
+        return True
+
     @staticmethod
     def get_status(data):
         return (
@@ -125,12 +137,6 @@ class Item:
             if (format.get("ext") or "").lower() == extension.lower()
         ]
         return Item.get_format(max(matching, key=key, default=None))
-
-    @staticmethod
-    def valid_format(item):
-        if minimum_resolution := Config.settings["Downloads"]["minimum_resolution"]:
-            return item.height == 0 or item.height >= minimum_resolution
-        return True
 
     @staticmethod
     def get_item(info):

@@ -1,4 +1,5 @@
 from datetime import datetime
+from time import time
 
 from .item import Item
 
@@ -57,6 +58,7 @@ class Channel:
         self.__item = None
         self.__active = False
         self.__slot_index = None
+        self.__epoch_cutoff = None
 
     def get_last_date(self):
         ret = datetime.fromtimestamp(0)
@@ -65,6 +67,17 @@ class Channel:
         except ValueError, TypeError:
             ...
         return ret
+
+    def get_last_error(self):
+        return self.__last_error
+
+    def get_name(self):
+        return self.__name
+
+    def set_epoch_cutoff(self, epoch):
+        if self.__epoch_cutoff is None:
+            self.__epoch_cutoff = int(time()) - epoch
+        return self.__epoch_cutoff
 
     def write(self):
         ret = (
@@ -80,6 +93,7 @@ class Channel:
         return ret
 
     def set_active(self):
+        self.__reset_epoch_cutoff()
         self.__active = True
 
     def active(self):
@@ -127,11 +141,18 @@ class Channel:
                     for channel in self.__sub_channels:
                         channel.set_active()
                         channel.download(self.__slot_index, processor)
+                        self.__set_error(
+                            f"({channel.get_name()} {channel.get_last_error()})"
+                        )
             else:
                 self.__item = Item.get_item(info)
-                if Item.valid_format(self.__item):
+                if self.__item.valid_format() and self.__item.within_cutoff(self):
                     return self.__download(processor)
+                else:
+                    self.__set_error("No formats or outside cutoff")
+                    return False
         else:
+            self.__set_error("Nothing to process")
             return False
         return True
 
@@ -146,6 +167,9 @@ class Channel:
         self.__last_download_date = datetime.strftime(
             datetime.now(), Channel.__date_fmt
         )
+
+    def __reset_epoch_cutoff(self):
+        self.__epoch_cutoff = None
 
     def __set_error(self, message):
         self.__last_error = message

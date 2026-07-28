@@ -13,8 +13,10 @@ if TYPE_CHECKING:
 
 
 class Slot:
+    index = 0
+
     def __init__(self, index, view_queue) -> None:
-        self.__index = index
+        self.__index = Slot.index
         self.__view_queue = view_queue
         self.__channel = None
         self.__ready = False
@@ -22,6 +24,7 @@ class Slot:
         self.__halt_event = Event()
         self.__thread = Thread(target=self.__run, name=f"Slot-{index}")
         self.__thread.start()
+        Slot.index += 1
 
     def process(self, channel):
         self.__ready = False

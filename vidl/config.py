@@ -49,10 +49,6 @@ class Config:
         "external_downloader_args": {
             "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"]
         },
-        "downloader_args": {
-            "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"],
-            "ffmpeg_i": ["-rw_timeout", "30000000"],
-        },
         "postprocessor_args": {
             "ffmpeg": ["-loglevel", "error", "-hide_banner", "-nostats"]
         },

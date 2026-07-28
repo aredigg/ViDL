@@ -130,12 +130,14 @@ class Channel:
             else:
                 self.__item = Item.get_item(info)
                 if Item.valid_format(self.__item):
-                    self.__download(processor)
+                    return self.__download(processor)
         else:
             return False
         return True
 
-    def __download(self, processor): ...
+    def __download(self, processor):
+        if item := self.__item:
+            return processor.download(item.original_url)
 
     def __set_attempt_date(self):
         self.__last_attempt_date = datetime.strftime(datetime.now(), Channel.__date_fmt)

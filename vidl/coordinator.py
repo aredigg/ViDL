@@ -4,12 +4,14 @@ from time import sleep
 from .channel import Channel
 from .config import Config
 from .slot import Slot
+from .view import View
 
 
 class Coordinator:
     def __init__(self) -> None:
         self.__running = True
         self.__view_queue = Queue()
+        self.__view = View(self.__view_queue)
         self.__channels = []
         self.__slots = []
         self.__error = None

@@ -1,5 +1,5 @@
 from queue import Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
 from typing import TYPE_CHECKING, cast
 
 from yt_dlp import YoutubeDL
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 class Slot:
     index = 0
+    processor_lock = Lock()
 
     def __init__(self, index, view_queue) -> None:
         self.__index = Slot.index
@@ -42,10 +43,11 @@ class Slot:
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
             if channel is not None:
-                with self.__setup() as processor:
-                    channel.download(self.__index, processor)
-                    self.__channel = None
-                    self.__ready = True
+                with Slot.processor_lock:
+                    processor = self.__setup()
+                channel.download(self.__index, processor)
+                self.__channel = None
+                self.__ready = True
 
     def __setup(self):
         hook = Hook(self.__view_queue, self.__index)

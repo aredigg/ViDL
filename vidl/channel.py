@@ -114,7 +114,7 @@ class Channel:
         self.__active = False
 
     def __extract(self, processor):
-        if self.__url is None:
+        if self.__url is None or self.__url == "None":
             self.__url = self.__name
         if info := processor.extract_info(self.__url, download=False, process=False):
             self.__name = (

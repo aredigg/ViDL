@@ -30,6 +30,7 @@ class Config:
     }
 
     ydl_settings = {
+        "color": "no_color",
         "ignoreerrors": True,
         "live_from_start": False,
         "multistreams": True,
@@ -39,7 +40,8 @@ class Config:
         "sleep_interval_requests": 0.01,
         "paths": {},
         "cookiesfrombrowser": ("safari", None, None, None),
-        "outtmpl": "%(epoch>%Y-%m)s/%(epoch>W%W)s/%(epoch>%a)s/%(id)s.%(ext)s",
+        "outtmpl": "%(channel)s/%(timestamp>%Y-%m)s/%(id)s.%(ext)s",
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo[height>=1600]+bestaudio/best",
         "writesubtitles": True,
         "writeautomaticsub": False,
         "subtitleslangs": ["all"],
@@ -49,9 +51,9 @@ class Config:
         "external_downloader_args": {
             "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"]
         },
-        "postprocessor_args": {
-            "ffmpeg": ["-loglevel", "error", "-hide_banner", "-nostats"]
-        },
+        #        "postprocessor_args": {
+        #            "ffmpeg": ["-loglevel", "error", "-hide_banner", "-nostats"]
+        #        },
     }
 
     @staticmethod

@@ -50,12 +50,12 @@ class Item:
     _percent: float
 
     def valid_format(self):
-        if minimum_resolution := Config.settings["Downloads"]["minimum_resolution"]:
+        if minimum_resolution := Config.settings["Download"]["minimum_resolution"]:
             return self.height == 0 or self.height >= minimum_resolution
         return True
 
     def within_cutoff(self, channel):
-        if cutoff := Config.settings["Downloads"]["playlist_cutoff"]:
+        if cutoff := Config.settings["Download"]["playlist_cutoff"]:
             return cutoff == 0 or self.epoch >= channel.set_epoch_cutoff(
                 cutoff * 86_400
             )

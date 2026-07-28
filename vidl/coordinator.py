@@ -69,8 +69,11 @@ class Coordinator:
                 self.__running = False
         for slot in self.__slots:
             slot.halt()
+        self.__view.halt()
         for slot in self.__slots:
             slot.join()
+        self.__view.join()
+
         return 3 if self.__error is not None else 0
 
     def __next_channel(self):

@@ -1,12 +1,128 @@
+from enum import Enum
 from queue import Queue
 from threading import Event, Thread
-from time import sleep
+from time import sleep, time
 
-from vidl.message import Message, Msg
+from vidl.util import Util
+
+from .message import Message, Msg, ProviderMessage, SleepMessage
+
+# slot index, status_icon, timer, playlist_name (len)
+# item_id, item_index, date, item_title
+# video_length, video_stats, audio_stats, extension, file_size
+# progress (time/time) (size/size)
+
+# 01 X 00:00 Playlist Name (99) 2026-06-01
+# abcdefghijkl  75 2026-07-01 Item name can be long
+# 00:00:00 2000x1000 @60 SDR AVC1 44100x2 MP4A EN-US LIVE/STREAM 15
+#  > XXXXXXXXXXXXXXX..... < 00:00/00:00 1200/3600 MB ETA 23:00
+#  > ERROR: xxx
 
 
 class View:
     index = 0
+
+    class Status(Enum):
+        INACTIVE = 0
+        WAITING = 1
+        SLEEPING = 2
+        DOWNLOADING = 3
+        PROCESSING = 4
+        WARNING = 5
+        ERROR = 6
+
+    class Slot:
+        def __init__(self, index) -> None:
+            self.__index = index
+            self.__status = View.Status.INACTIVE
+            self.__timer = None
+            self.__top_name = None
+            self.__top_name_count = None
+            self.__top_name_last_dl = None
+            self.__item_id = None
+            self.__item_index = None
+            self.__item_date = None
+            self.__item_title = None
+            self.__media_length = None
+            self.__media_video_stats = None
+            self.__media_audio_stats = None
+            self.__media_subtitles = None
+            self.__media_extenstion = None
+            self.__media_live_state = None
+            self.__media_age_limit = None
+            self.__progress_time = None
+            self.__progress_time_est = None
+            self.__progress_file_size = None
+            self.__progress_file_size_est = None
+            self.__progress_eta = None
+            self.__status_provider = None
+            self.__status_message = None
+
+        def set_timer(self, time_offset):
+            self.__timer = int(time()) + time_offset
+
+        def timer(self):
+            if self.__timer is not None:
+                return Util.format_seconds((time()) - self.__timer)
+            return "--:--"
+
+        def output(self, line):
+            match line:
+                case 0:
+                    return (
+                        f"{self.__index:>2.2} "
+                        + f"{self.__status_icon()} "
+                        + f"{self.timer()} "
+                        + f"{self.__top_name} ({self.__top_name_count}) "
+                        + f"{self.__top_name_last_dl}"
+                    )
+                case 1:
+                    return (
+                        f"{self.__item_id:>20.20} "
+                        + f"{self.__item_date} "
+                        + f"{self.__item_index:>4.4} "
+                        + f"{self.__item_title}"
+                    )
+                case 2:
+                    return (
+                        f"{self.__media_length} "
+                        + f"{self.__media_video_stats} "
+                        + f"{self.__media_audio_stats} "
+                        + f"{self.__media_subtitles} "
+                        + f"{self.__media_extenstion} "
+                        + f"{self.__media_live_state} "
+                        + f"{self.__media_age_limit} "
+                    )
+                case 3:
+                    if self.__status == View.Status.DOWNLOADING:
+                        return (
+                            f"{self.__progress_meter()} "
+                            + f"{self.__progress_time}/{self.__progress_time_est} "
+                            + f"{self.__progress_file_size}/{self.__progress_file_size_est} "
+                            + f"ETA {self.__progress_eta}"
+                        )
+                    else:
+                        return f"{self.__status_provider} " + f"{self.__status_message}"
+
+        def __status_icon(self):
+            match self.__status:
+                case View.Status.INACTIVE:
+                    return "○"
+                case View.Status.WAITING:
+                    return "○"
+                case View.Status.SLEEPING:
+                    return "○"
+                case View.Status.DOWNLOADING:
+                    return "●"
+                case View.Status.PROCESSING:
+                    return "●"
+                case View.Status.WARNING:
+                    return "○"
+                case View.Status.ERROR:
+                    return "○"
+
+        def __progress_meter(self):
+            return ""
 
     def __init__(self) -> None:
         self.__ready = False
@@ -15,6 +131,7 @@ class View:
         self.__thread = Thread(target=self.__run, name=f"View-{View.index}")
         self.__thread.start()
         View.index += 1
+        self.__slots = {}
 
     def get_queue(self):
         return self.__queue
@@ -27,6 +144,13 @@ class View:
         while not self.__halt_event.is_set():
             message = self.__queue.get()
             if message.kind != Msg.HALT:
+                match message.kind:
+                    case Msg.INIT:
+                        if isinstance(message.body, ProviderMessage):
+                            self.__create_slot(message.body)
+                    case Msg.SLEEP:
+                        if isinstance(message.body, SleepMessage):
+                            self.__update_sleep(message.body)
                 sleep(0.1)
 
     def halt(self):
@@ -36,3 +160,15 @@ class View:
 
     def join(self):
         self.__thread.join()
+
+    def __create_slot(self, body):
+        if body.provider == "coordinator":
+            self.__slots[body.index] = View.Slot(body.index)
+
+    def __update_sleep(self, body):
+        if body.index in self.__slots:
+            if body.provider == "download":
+                self.__slots[body.index].set_timer(body.time_offset)
+
+    def print_slot(self, index):
+        print(f"{self.__slots[index].timer()}")

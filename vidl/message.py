@@ -4,12 +4,31 @@ from enum import Enum
 
 class Msg(Enum):
     HALT = 0
+    SLEEP = 1
+    INIT = 2
+    INFO = 3
+    WARN = 4
+    ERROR = 5
+
+
+@dataclass
+class SleepMessage:
+    index: int
+    provider: str
+    time_offset: int
+
+
+@dataclass
+class ProviderMessage:
+    index: int
+    provider: str
+    message: str
 
 
 @dataclass
 class Message:
     kind: Msg
-    body: None
+    body: None | SleepMessage | ProviderMessage
 
 
 # messages

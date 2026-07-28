@@ -1,5 +1,15 @@
 from queue import Queue
 from threading import Event, Thread
+from typing import TYPE_CHECKING, cast
+
+from yt_dlp import YoutubeDL
+
+from .config import Config
+from .hook import Hook
+from .logger import Logger
+
+if TYPE_CHECKING:
+    from yt_dlp import _Params
 
 
 class Slot:
@@ -29,9 +39,21 @@ class Slot:
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
             if channel is not None:
-                channel.download(self.__index)
-                self.__channel = None
-                self.__ready = True
+                with self.__setup() as processor:
+                    channel.download(self.__index, processor)
+                    self.__channel = None
+                    self.__ready = True
+
+    def __setup(self):
+        hook = Hook(self.__view_queue, self.__index)
+        settings = Config.ydl_settings
+        settings["paths"]["home"] = Config.settings["Paths"]["output"]
+        settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]
+        settings["download_archive"] = Config.settings["Channels"]["archived"]
+        settings["logger"] = Logger(self.__view_queue, self.__index)
+        settings["progress_hooks"] = [hook.common]
+        settings["postprocessor_hooks"] = [hook.common]
+        return YoutubeDL(cast("_Params", dict(settings)))
 
     def halt(self):
         self.__ready = False

@@ -1,6 +1,6 @@
 from datetime import datetime
-from random import randint
-from time import sleep
+
+from .item import Item
 
 
 class Channel:
@@ -15,15 +15,46 @@ class Channel:
     header = ";".join(__header_columns) + "\n"
     __date_fmt = "%Y-%m-%d"
 
-    def __init__(self, name, url, last_dl_dte, last_at_dte, last_error) -> None:
+    @staticmethod
+    def load_channels(file_name):
+        channels = []
+        with open(file_name) as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("#"):
+                    if line.count(";") > 0:
+                        parameters = line.split(";")
+                        if len(parameters) == Channel.header_len:
+                            channels.append(Channel(*parameters, sub_level=0))
+                    else:
+                        channels.append(Channel(line, None, None, None, None))
+        return channels
+
+    @staticmethod
+    def save_channels(channels, file_name):
+        write_buffer = Channel.header
+        for channel in channels:
+            write_buffer += channel.write()
+        if write_buffer != Channel.header:
+            try:
+                with open(file_name, "w") as f:
+                    f.write(write_buffer)
+            except FileNotFoundError as e:
+                return e
+        else:
+            return "Incorrect channel specification at write"
+
+    def __init__(
+        self, name, url, last_dl_dte, last_at_dte, last_error, sub_level=0
+    ) -> None:
         self.__name = name
         self.__url = url
         self.__last_download_date = last_dl_dte
         self.__last_attempt_date = last_at_dte
         self.__last_error = last_error
-        self.__media_items = []
         self.__sub_channels = []
-        self.__sub_level = 0
+        self.__sub_level = sub_level
+        self.__item = None
         self.__active = False
         self.__slot_index = None
 
@@ -56,37 +87,63 @@ class Channel:
 
     # ----- Inside slot thread
 
-    def download(self, slot):
+    def download(self, slot, processor):
         if self.__slot_index is None:
             self.__slot_index = slot
-            self.set_attempt_date()
-            print(
-                f"\033[3{slot + 1}mDownloading",
-                self.__name,
-                self.__last_attempt_date,
-                self.__last_download_date,
-                "\033[0m",
-            )
-            sleep(randint(1, 20) / 4)
-            print(f"\033[3{slot + 1}mCompleted", self.__name, "\033[0m")
-            self.set_download_date()
+            self.__set_attempt_date()
+            if self.__extract(processor):
+                self.__set_download_date()
         else:
-            print(
-                f"\033[3{slot + 1}mActive\033[3{self.__slot_index + 1}m",
-                self.__name,
-                "\033[0m",
-            )
+            # Should not happen
             return
         self.__slot_index = None
         self.__active = False
 
-    def set_attempt_date(self):
+    def __extract(self, processor):
+        if self.__url is None:
+            self.__url = self.__name
+        if info := processor.extract_info(self.__url, download=False, process=False):
+            self.__name = (
+                info.get("title")
+                or info.get("channel")
+                or info.get("uploader")
+                or f"{info.get('extractor')} ({info.get('id')})"
+            )
+            if info.get("_type") == "playlist":
+                if entries := list(info.get("entries")):
+                    for entry in entries:
+                        url = entry.get("webpage_url") or entry.get("url")
+                        self.__sub_channels.append(
+                            Channel(
+                                url,
+                                None,
+                                None,
+                                None,
+                                None,
+                                sub_level=self.__sub_level + 1,
+                            )
+                        )
+                if self.__sub_channels:
+                    for channel in self.__sub_channels:
+                        channel.set_active()
+                        channel.download(self.__slot_index, processor)
+            else:
+                self.__item = Item.get_item(info)
+                if Item.valid_format(self.__item):
+                    self.__download(processor)
+        else:
+            return False
+        return True
+
+    def __download(self, processor): ...
+
+    def __set_attempt_date(self):
         self.__last_attempt_date = datetime.strftime(datetime.now(), Channel.__date_fmt)
 
-    def set_download_date(self):
+    def __set_download_date(self):
         self.__last_download_date = datetime.strftime(
             datetime.now(), Channel.__date_fmt
         )
 
-    def set_error(self, message):
+    def __set_error(self, message):
         self.__last_error = message

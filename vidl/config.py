@@ -8,10 +8,25 @@ class Config:
     ini = "config.ini"
 
     settings = {
-        "Channels": {"file_name": "channels", "slots": 0},
-        "Paths": {"config": None, "output": None, "temporary": None},
-        "Download": {"minimum_resolution": 0, "minimum_duration": 0},
-        "Debug": {"file_name": "debug", "active": False},
+        "Channels": {
+            "file_name": "channels",
+            "archived": "archived",
+            "slots": 0,
+        },
+        "Paths": {
+            "config": None,
+            "output": None,
+            "temporary": None,
+        },
+        "Download": {
+            "minimum_resolution": 0,
+            "minimum_duration": 0,
+            "playlist_cutoff": 0,
+        },
+        "Debug": {
+            "file_name": "debug",
+            "active": False,
+        },
     }
 
     ydl_settings = {

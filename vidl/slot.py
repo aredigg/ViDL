@@ -7,6 +7,7 @@ from yt_dlp import YoutubeDL
 from .config import Config
 from .hook import Hook
 from .logger import Logger
+from .message import Message, Msg, ProviderMessage
 
 if TYPE_CHECKING:
     from yt_dlp import _Params
@@ -40,13 +41,19 @@ class Slot:
 
     def __run(self):
         self.__ready = True
+        self.__view_queue.put(
+            Message(
+                kind=Msg.INIT,
+                body=ProviderMessage(index=self.__index, provider="slot"),
+            )
+        )
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
             if channel is not None:
                 with Slot.processor_lock:
                     processor = self.__setup()
                 channel.set_halt_event(self.__halt_event)
-                channel.download(self.__index, processor)
+                channel.download(self.__index, processor, self.__view_queue)
                 self.__channel = None
                 self.__ready = True
 

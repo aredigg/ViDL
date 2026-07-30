@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from enum import Enum
 
+from .item import Item
+
 
 class Msg(Enum):
     HALT = 0
@@ -12,23 +14,52 @@ class Msg(Enum):
 
 
 @dataclass
-class SleepMessage:
+class ProviderMessage:
     index: int
     provider: str
+
+
+@dataclass
+class SleepMessage(ProviderMessage):
     time_offset: int
 
 
 @dataclass
-class ProviderMessage:
-    index: int
-    provider: str
-    message: str
+class InfoMessage(ProviderMessage):
+    target: None | str
+    message: None | str
+
+
+@dataclass
+class WarnMessage(ProviderMessage):
+    target: None | str
+    message: None | str
+
+
+@dataclass
+class ErrorMessage(ProviderMessage):
+    message: None | str
+
+
+@dataclass
+class URLMessage(ProviderMessage):
+    url: str
+
+
+@dataclass
+class FilePathMessage(ProviderMessage):
+    path: str
+
+
+@dataclass
+class ChannelMessage(ProviderMessage):
+    channel: Item
 
 
 @dataclass
 class Message:
     kind: Msg
-    body: None | SleepMessage | ProviderMessage
+    body: None | ProviderMessage
 
 
 # messages

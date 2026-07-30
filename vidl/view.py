@@ -1,5 +1,5 @@
 from enum import Enum
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, Thread
 from time import sleep, time
 
@@ -36,27 +36,27 @@ class View:
             self.__index = index
             self.__status = View.Status.INACTIVE
             self.__timer = None
-            self.__top_name = None
+            self.__top_name = ""
             self.__top_name_count = None
-            self.__top_name_last_dl = None
-            self.__item_id = None
+            self.__top_name_last_dl = ""
+            self.__item_id = ""
             self.__item_index = None
-            self.__item_date = None
-            self.__item_title = None
-            self.__media_length = None
-            self.__media_video_stats = None
-            self.__media_audio_stats = None
-            self.__media_subtitles = None
-            self.__media_extenstion = None
-            self.__media_live_state = None
-            self.__media_age_limit = None
+            self.__item_date = ""
+            self.__item_title = ""
+            self.__media_length = ""
+            self.__media_video_stats = ""
+            self.__media_audio_stats = ""
+            self.__media_subtitles = ""
+            self.__media_extenstion = ""
+            self.__media_live_state = ""
+            self.__media_age_limit = ""
             self.__progress_time = None
             self.__progress_time_est = None
             self.__progress_file_size = None
             self.__progress_file_size_est = None
             self.__progress_eta = None
-            self.__status_provider = None
-            self.__status_message = None
+            self.__status_provider = ""
+            self.__status_message = ""
 
         def set_timer(self, time_offset):
             self.__timer = int(time()) + time_offset
@@ -70,18 +70,22 @@ class View:
             match line:
                 case 0:
                     return (
-                        f"{self.__index:>2.2} "
+                        f"{str(self.__index + 1):>2.2} "
                         + f"{self.__status_icon()} "
                         + f"{self.timer()} "
-                        + f"{self.__top_name} ({self.__top_name_count}) "
+                        + f"{self.__top_name} "
+                        + ""
+                        if not self.__top_name_count
+                        else f"({self.__top_name_count}) "
                         + f"{self.__top_name_last_dl}"
                     )
                 case 1:
                     return (
                         f"{self.__item_id:>20.20} "
-                        + f"{self.__item_date} "
-                        + f"{self.__item_index:>4.4} "
-                        + f"{self.__item_title}"
+                        + f"{self.__item_date:>10.10} "
+                        + "     "
+                        if not self.__item_index
+                        else f"{self.__item_index:>4.4} " + f"{self.__item_title}"
                     )
                 case 2:
                     return (
@@ -98,8 +102,11 @@ class View:
                         return (
                             f"{self.__progress_meter()} "
                             + f"{self.__progress_time}/{self.__progress_time_est} "
-                            + f"{self.__progress_file_size}/{self.__progress_file_size_est} "
-                            + f"ETA {self.__progress_eta}"
+                            if self.__progress_time is not None
+                            else ""
+                            + f"{self.__progress_file_size}/{self.__progress_file_size_est} MB "
+                            if self.__progress_file_size is not None
+                            else "" + f"ETA {self.__progress_eta}"
                         )
                     else:
                         return f"{self.__status_provider} " + f"{self.__status_message}"
@@ -144,16 +151,23 @@ class View:
         with Terminal(self.__input_queue) as terminal:
             self.__ready = True
             while not self.__halt_event.is_set():
-                message = self.__queue.get()
-                if message.kind != Msg.HALT:
-                    match message.kind:
-                        case Msg.INIT:
-                            if isinstance(message.body, ProviderMessage):
-                                self.__create_slot(message.body)
-                        case Msg.SLEEP:
-                            if isinstance(message.body, SleepMessage):
-                                self.__update_sleep(message.body)
-                    sleep(0.1)
+                try:
+                    message = self.__queue.get(block=False)
+                    if message.kind != Msg.HALT:
+                        match message.kind:
+                            case Msg.INIT:
+                                if isinstance(message.body, ProviderMessage):
+                                    self.__create_slot(message.body)
+                            case Msg.SLEEP:
+                                if isinstance(message.body, SleepMessage):
+                                    self.__update_sleep(message.body)
+                except Empty:
+                    for index, slot in self.__slots.items():
+                        terminal.print(slot.output(0), (index * 4) + 1, 1)
+                        terminal.print(slot.output(1), (index * 4) + 2, 1)
+                        terminal.print(slot.output(2), (index * 4) + 3, 1)
+                        terminal.print(slot.output(3), (index * 4) + 4, 1)
+                    sleep(0.5)
 
     def halt(self):
         self.__ready = False
@@ -164,7 +178,7 @@ class View:
         self.__thread.join()
 
     def __create_slot(self, body):
-        if body.provider == "coordinator":
+        if body.provider == "slot":
             self.__slots[body.index] = View.Slot(body.index)
 
     def __update_sleep(self, body):

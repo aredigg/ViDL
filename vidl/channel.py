@@ -1,6 +1,8 @@
 from datetime import datetime
 from time import time
 
+from vidl.message import ChannelMessage, Message, Msg
+
 from .item import Item
 
 
@@ -105,11 +107,11 @@ class Channel:
 
     # ----- Inside slot thread
 
-    def download(self, slot, processor):
+    def download(self, slot, processor, queue):
         if self.__slot_index is None:
             self.__slot_index = slot
             self.__set_attempt_date()
-            if self.__extract(processor):
+            if self.__extract(processor, queue):
                 self.__set_download_date()
         else:
             # Should not happen
@@ -117,7 +119,7 @@ class Channel:
         self.__slot_index = None
         self.__active = False
 
-    def __extract(self, processor):
+    def __extract(self, processor, queue):
         if self.__halt_event is not None and self.__halt_event.is_set():
             self.__set_error("Got halted")
             return False
@@ -129,6 +131,20 @@ class Channel:
                 or info.get("channel")
                 or info.get("uploader")
                 or f"{info.get('extractor')} ({info.get('id')})"
+            )
+            queue.put(
+                Message(
+                    kind=Msg.INIT,
+                    body=ChannelMessage(
+                        index=self.__slot_index or -1,
+                        provider="channel",
+                        channel=Item(
+                            *Item.get_details(info)
+                            + Item.enumerate_best_format(info.get("formats", {}))
+                            + Item.get_status(info)
+                        ),
+                    ),
+                )
             )
             if info.get("_type") == "playlist":
                 if entries := list(info.get("entries")):

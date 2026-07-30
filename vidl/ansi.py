@@ -1,5 +1,7 @@
 import re
 
+from .unicode import Unicode
+
 
 class ANSI:
     class Alternate:
@@ -36,5 +38,31 @@ class ANSI:
         return f"\x1b]9;{string}\x1b\\"
 
     @staticmethod
-    def print(col, row, string):
+    def print(string, row=1, col=1):
         return f"\x1b[{row};{col}H{string}"
+
+    @staticmethod
+    def len(string):
+        return Unicode.len(ANSI.remove(string))
+
+    @staticmethod
+    def trim(string, length):
+        regex = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+        pos = 0
+        escapes = []
+        while pos < len(string):
+            match = regex.match(string, pos)
+            if match:
+                escapes.append((match.group(), pos))
+                pos = match.end()
+            else:
+                pos += 1
+        string = regex.sub("", string)
+        while ANSI.len(string) > length:
+            string = string[:-1]
+        for escape, pos in escapes:
+            if pos < len(string):
+                string = string[:pos] + escape + string[pos:]
+            else:
+                string += escape
+        return string

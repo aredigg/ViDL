@@ -19,6 +19,7 @@ class Config:
             "temporary": None,
         },
         "Download": {
+            "allow_vertical": False,
             "minimum_resolution": 0,
             "minimum_duration": 0,
             "playlist_cutoff": 0,
@@ -41,7 +42,7 @@ class Config:
         "paths": {},
         "cookiesfrombrowser": ("safari", None, None, None),
         "outtmpl": "%(channel)s/%(timestamp>%Y-%m)s/%(id)s.%(ext)s",
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo[height>=1600]+bestaudio/best",
+        "format": "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4] / bestvideo*+bestaudio/best",
         "writesubtitles": True,
         "writeautomaticsub": False,
         "subtitleslangs": ["all"],
@@ -72,7 +73,8 @@ class Config:
                         ...
                     elif line.startswith("[") and line.endswith("]"):
                         category = line[1:-1]
-                        Config.settings[category] = {}
+                        if category not in Config.settings:
+                            Config.settings[category] = {}
                     elif line.count("=") > 0:
                         key, value = line.split("=", maxsplit=1)
                         key = key.strip()

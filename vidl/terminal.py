@@ -38,4 +38,5 @@ class Terminal:
         remaining_space = self.__width - col
         if ANSI.len(string) > remaining_space:
             string = ANSI.trim(string, remaining_space)
-        print(ANSI.print(string, row, col))
+        print(ANSI.print(string, row, col), end="")
+        print(ANSI.print(""))

@@ -8,15 +8,20 @@ class Msg(Enum):
     HALT = 0
     SLEEP = 1
     INIT = 2
-    INFO = 3
-    WARN = 4
-    ERROR = 5
+    UPDATE = 3
+    INFO = 4
+    WARN = 5
+    ERROR = 6
 
 
 @dataclass
 class ProviderMessage:
     index: int
     provider: str
+
+
+@dataclass
+class InitMessage(ProviderMessage): ...
 
 
 @dataclass
@@ -52,8 +57,16 @@ class FilePathMessage(ProviderMessage):
 
 
 @dataclass
-class ChannelMessage(ProviderMessage):
-    channel: Item
+class ItemMessage(ProviderMessage):
+    item: Item
+    name: None | str
+    last_date: None | str
+    playlist_index: int
+
+
+@dataclass
+class PlaylistCountMessage(ProviderMessage):
+    playlist_count: int
 
 
 @dataclass

@@ -1,5 +1,5 @@
-from vidl.item import Item
-from vidl.message import ChannelMessage, Message, Msg
+from .item import Item
+from .message import ItemMessage, Message, Msg
 
 
 class DownloadCancelled(Exception):
@@ -15,15 +15,14 @@ class Hook:
     def common(self, data):
         self.__view_queue.put(
             Message(
-                kind=Msg.INIT,
-                body=ChannelMessage(
+                kind=Msg.UPDATE,
+                body=ItemMessage(
                     index=self.__slot_index,
-                    provider="channel",
-                    channel=Item(
-                        *Item.get_details(data.get("info_dict", {}))
-                        + Item.get_format(data.get("info_dict", {}))
-                        + Item.get_status(data or {})
-                    ),
+                    provider="hook",
+                    item=Item.get_item_hooks(data),
+                    name=None,
+                    last_date=None,
+                    playlist_index=0,
                 ),
             )
         )

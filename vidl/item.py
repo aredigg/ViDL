@@ -7,8 +7,11 @@ from .config import Config
 class Item:
     id: str
     title: str
+    channel: str
+    uploader: str
     thumbnail: str
     is_live: bool
+    availability: str
     age_limit: int
     webpage_url: str
     original_url: str
@@ -22,7 +25,10 @@ class Item:
     fulltitle: str
     release_year: str
     live_status: str
+    timestamp: int
+    duration: int
     epoch: int
+    _type: str
     _filename: str
     _real_download: bool
     _finaldir: str
@@ -46,17 +52,24 @@ class Item:
     elapsed: float
     downloaded_bytes: int
     total_bytes: int
+    fragment_index: int
+    fragment_count: int
     speed: float
     _percent: float
 
     def valid_format(self):
+        if (
+            not Config.settings["Download"]["allow_vertical"]
+            and self.height > self.width
+        ):
+            return False
         if minimum_resolution := Config.settings["Download"]["minimum_resolution"]:
             return self.height == 0 or self.height >= minimum_resolution
         return True
 
     def within_cutoff(self, channel):
         if cutoff := Config.settings["Download"]["playlist_cutoff"]:
-            return cutoff == 0 or self.epoch >= channel.set_epoch_cutoff(
+            return cutoff == 0 or self.timestamp >= channel.set_epoch_cutoff(
                 cutoff * 86_400
             )
         return True
@@ -70,6 +83,8 @@ class Item:
             data.get("elapsed") or 0.0,
             data.get("downloaded_bytes") or 0,
             data.get("total_bytes") or 0,
+            data.get("fragment_index") or 0,
+            data.get("fragment_count") or 0,
             data.get("speed") or 0.0,
             data.get("_percent") or 0.0,
         )
@@ -79,8 +94,11 @@ class Item:
         return (
             info.get("id") or "",
             info.get("title") or "",
+            info.get("channel") or "",
+            info.get("uploader") or "",
             info.get("thumbnail") or "",
             info.get("is_live") or False,
+            info.get("availability") or "",
             info.get("age_limit") or 0,
             info.get("webpage_url") or "",
             info.get("original_url") or "",
@@ -94,7 +112,10 @@ class Item:
             info.get("fulltitle") or "",
             info.get("release_year") or "",
             info.get("live_status") or "",
+            info.get("timestamp") or 0,
+            info.get("duration") or 0,
             info.get("epoch") or 0,
+            info.get("_type") or "",
             info.get("_filename") or "",
             info.get("__real_download") or False,
             info.get("__finaldir") or "",
@@ -136,7 +157,7 @@ class Item:
             for format in formats
             if (format.get("ext") or "").lower() == extension.lower()
         ]
-        return Item.get_format(max(matching, key=key, default=None))
+        return Item.get_format(max(matching, key=key, default={}))
 
     @staticmethod
     def get_item(info):

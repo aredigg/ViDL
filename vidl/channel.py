@@ -1,9 +1,9 @@
 from datetime import datetime
 from time import time
 
-from vidl.message import ChannelMessage, Message, Msg
-
 from .item import Item
+from .message import ItemMessage, Message, Msg, PlaylistCountMessage
+from .util import Util
 
 
 class Channel:
@@ -16,7 +16,6 @@ class Channel:
     ]
     header_len = len(__header_columns)
     header = ";".join(__header_columns) + "\n"
-    __date_fmt = "%Y-%m-%d"
 
     @staticmethod
     def load_channels(file_name):
@@ -66,7 +65,7 @@ class Channel:
     def get_last_date(self):
         ret = datetime.fromtimestamp(0)
         try:
-            ret = datetime.strptime(self.__last_download_date, Channel.__date_fmt)
+            ret = datetime.strptime(self.__last_download_date, Util.date_fmt)
         except ValueError, TypeError:
             ...
         return ret
@@ -107,11 +106,11 @@ class Channel:
 
     # ----- Inside slot thread
 
-    def download(self, slot, processor, queue):
+    def download(self, slot, processor, queue, playlist_index=1):
         if self.__slot_index is None:
             self.__slot_index = slot
             self.__set_attempt_date()
-            if self.__extract(processor, queue):
+            if self.__extract(processor, queue, playlist_index):
                 self.__set_download_date()
         else:
             # Should not happen
@@ -119,7 +118,7 @@ class Channel:
         self.__slot_index = None
         self.__active = False
 
-    def __extract(self, processor, queue):
+    def __extract(self, processor, queue, playlist_index):
         if self.__halt_event is not None and self.__halt_event.is_set():
             self.__set_error("Got halted")
             return False
@@ -132,22 +131,34 @@ class Channel:
                 or info.get("uploader")
                 or f"{info.get('extractor')} ({info.get('id')})"
             )
-            queue.put(
-                Message(
-                    kind=Msg.INIT,
-                    body=ChannelMessage(
-                        index=self.__slot_index or -1,
-                        provider="channel",
-                        channel=Item(
-                            *Item.get_details(info)
-                            + Item.enumerate_best_format(info.get("formats", {}))
-                            + Item.get_status(info)
+
+            if self.__slot_index is not None:
+                queue.put(
+                    Message(
+                        kind=Msg.INIT,
+                        body=ItemMessage(
+                            index=self.__slot_index,
+                            provider="channel",
+                            item=Item.get_item(info),
+                            name=self.__name if self.__sub_level == 0 else None,
+                            last_date=self.__last_download_date,
+                            playlist_index=playlist_index,
                         ),
-                    ),
+                    )
                 )
-            )
             if info.get("_type") == "playlist":
                 if entries := list(info.get("entries")):
+                    if self.__slot_index is not None:
+                        queue.put(
+                            Message(
+                                kind=Msg.INIT,
+                                body=PlaylistCountMessage(
+                                    index=self.__slot_index,
+                                    provider="channel",
+                                    playlist_count=len(entries),
+                                ),
+                            )
+                        )
                     for entry in entries:
                         url = entry.get("webpage_url") or entry.get("url")
                         self.__sub_channels.append(
@@ -161,10 +172,14 @@ class Channel:
                             )
                         )
                 if self.__sub_channels:
-                    for channel in self.__sub_channels:
+                    for playlist_index, channel in enumerate(
+                        self.__sub_channels, start=1
+                    ):
                         channel.set_active()
                         channel.set_halt_event(self.__halt_event)
-                        channel.download(self.__slot_index, processor)
+                        channel.download(
+                            self.__slot_index, processor, queue, playlist_index
+                        )
                         self.__set_error(f"({channel.get_last_error()})")
             else:
                 self.__item = Item.get_item(info)
@@ -183,12 +198,10 @@ class Channel:
             return processor.download(item.original_url)
 
     def __set_attempt_date(self):
-        self.__last_attempt_date = datetime.strftime(datetime.now(), Channel.__date_fmt)
+        self.__last_attempt_date = datetime.strftime(datetime.now(), Util.date_fmt)
 
     def __set_download_date(self):
-        self.__last_download_date = datetime.strftime(
-            datetime.now(), Channel.__date_fmt
-        )
+        self.__last_download_date = datetime.strftime(datetime.now(), Util.date_fmt)
 
     def __reset_epoch_cutoff(self):
         self.__epoch_cutoff = None

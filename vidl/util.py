@@ -1,4 +1,9 @@
+from datetime import datetime
+
+
 class Util:
+    date_fmt = "%Y-%m-%d"
+
     @staticmethod
     def format_seconds(seconds, include_seconds=True, two_parts=True):
         if seconds < 0:
@@ -18,3 +23,9 @@ class Util:
                 hr += 1
                 mn = 0
         return f"{hr:02}:{mn:02}"
+
+    @staticmethod
+    def get_time(epoch=None):
+        if epoch is None:
+            return datetime.strftime(datetime.now(), Util.date_fmt)
+        return datetime.strftime(datetime.fromtimestamp(epoch), Util.date_fmt)

@@ -45,12 +45,13 @@ class Slot:
             if channel is not None:
                 with Slot.processor_lock:
                     processor = self.__setup()
+                channel.set_halt_event(self.__halt_event)
                 channel.download(self.__index, processor)
                 self.__channel = None
                 self.__ready = True
 
     def __setup(self):
-        hook = Hook(self.__view_queue, self.__index)
+        hook = Hook(self.__view_queue, self.__halt_event, self.__index)
         settings = Config.ydl_settings
         settings["paths"]["home"] = Config.settings["Paths"]["output"]
         settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]

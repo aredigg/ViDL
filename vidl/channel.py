@@ -59,6 +59,7 @@ class Channel:
         self.__active = False
         self.__slot_index = None
         self.__epoch_cutoff = None
+        self.__halt_event = None
 
     def get_last_date(self):
         ret = datetime.fromtimestamp(0)
@@ -78,6 +79,9 @@ class Channel:
         if self.__epoch_cutoff is None:
             self.__epoch_cutoff = int(time()) - epoch
         return self.__epoch_cutoff
+
+    def set_halt_event(self, halt_event):
+        self.__halt_event = halt_event
 
     def write(self):
         ret = (
@@ -114,6 +118,9 @@ class Channel:
         self.__active = False
 
     def __extract(self, processor):
+        if self.__halt_event is not None and self.__halt_event.is_set():
+            self.__set_error("Got halted")
+            return False
         if self.__url is None or self.__url == "None":
             self.__url = self.__name
         if info := processor.extract_info(self.__url, download=False, process=False):
@@ -140,10 +147,9 @@ class Channel:
                 if self.__sub_channels:
                     for channel in self.__sub_channels:
                         channel.set_active()
+                        channel.set_halt_event(self.__halt_event)
                         channel.download(self.__slot_index, processor)
-                        self.__set_error(
-                            f"({channel.get_name()} {channel.get_last_error()})"
-                        )
+                        self.__set_error(f"({channel.get_last_error()})")
             else:
                 self.__item = Item.get_item(info)
                 if self.__item.valid_format() and self.__item.within_cutoff(self):

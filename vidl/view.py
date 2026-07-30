@@ -3,9 +3,9 @@ from queue import Queue
 from threading import Event, Thread
 from time import sleep, time
 
-from vidl.util import Util
-
 from .message import Message, Msg, ProviderMessage, SleepMessage
+from .terminal import Terminal
+from .util import Util
 
 # slot index, status_icon, timer, playlist_name (len)
 # item_id, item_index, date, item_title
@@ -127,31 +127,33 @@ class View:
     def __init__(self) -> None:
         self.__ready = False
         self.__queue = Queue()
+        self.__input_queue = Queue()
         self.__halt_event = Event()
         self.__thread = Thread(target=self.__run, name=f"View-{View.index}")
         self.__thread.start()
         View.index += 1
         self.__slots = {}
 
-    def get_queue(self):
-        return self.__queue
+    def get_queues(self):
+        return self.__queue, self.__input_queue
 
     def ready(self):
         return self.__ready and self.__thread.is_alive()
 
     def __run(self):
-        self.__ready = True
-        while not self.__halt_event.is_set():
-            message = self.__queue.get()
-            if message.kind != Msg.HALT:
-                match message.kind:
-                    case Msg.INIT:
-                        if isinstance(message.body, ProviderMessage):
-                            self.__create_slot(message.body)
-                    case Msg.SLEEP:
-                        if isinstance(message.body, SleepMessage):
-                            self.__update_sleep(message.body)
-                sleep(0.1)
+        with Terminal(self.__input_queue) as terminal:
+            self.__ready = True
+            while not self.__halt_event.is_set():
+                message = self.__queue.get()
+                if message.kind != Msg.HALT:
+                    match message.kind:
+                        case Msg.INIT:
+                            if isinstance(message.body, ProviderMessage):
+                                self.__create_slot(message.body)
+                        case Msg.SLEEP:
+                            if isinstance(message.body, SleepMessage):
+                                self.__update_sleep(message.body)
+                    sleep(0.1)
 
     def halt(self):
         self.__ready = False
@@ -169,6 +171,3 @@ class View:
         if body.index in self.__slots:
             if body.provider == "download":
                 self.__slots[body.index].set_timer(body.time_offset)
-
-    def print_slot(self, index):
-        print(f"{self.__slots[index].timer()}")

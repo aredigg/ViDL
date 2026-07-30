@@ -10,7 +10,7 @@ class Coordinator:
     def __init__(self) -> None:
         self.__running = True
         self.__view = View()
-        self.__view_queue = self.__view.get_queue()
+        self.__view_queue, self.__input_queue = self.__view.get_queues()
         self.__channels = []
         self.__slots = []
         self.__error = None
@@ -69,9 +69,9 @@ class Coordinator:
                 self.__running = False
         for slot in self.__slots:
             slot.halt()
-        self.__view.halt()
         for slot in self.__slots:
             slot.join()
+        self.__view.halt()
         self.__view.join()
 
         return 3 if self.__error is not None else 0

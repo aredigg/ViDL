@@ -42,6 +42,7 @@ class ANSI:
         BurntSienna = "\x1b[38;2;227;114;86m"
         PineGreen = "\x1b[38;2;32;109;75m"
         FashionBlue = "\x1b[38;2;36;59;211m"
+        NeonChartreuse = "\x1b[38;2;217;255;47m"  # D9FF2F
 
     @staticmethod
     def remove(string):

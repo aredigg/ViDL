@@ -51,8 +51,12 @@ class Channel:
     ) -> None:
         self.__name = name
         self.__url = url
-        self.__last_download_date = last_dl_dte
-        self.__last_attempt_date = last_at_dte
+        try:
+            self.__last_download_date = int(last_dl_dte)
+            self.__last_attempt_date = int(last_at_dte)
+        except ValueError, TypeError:
+            self.__last_download_date = 0
+            self.__last_attempt_date = 0
         self.__last_error = last_error
         self.__sub_channels = []
         self.__sub_level = sub_level
@@ -63,11 +67,9 @@ class Channel:
         self.__halt_event = None
 
     def get_last_date(self):
-        ret = datetime.fromtimestamp(0)
-        try:
-            ret = datetime.strptime(self.__last_download_date, Util.date_fmt)
-        except ValueError, TypeError:
-            ...
+        ret = datetime.fromtimestamp(
+            self.__last_download_date or self.__last_attempt_date or 0
+        )
         return ret
 
     def get_last_error(self):
@@ -141,7 +143,7 @@ class Channel:
                             provider="channel",
                             item=Item.get_item(info),
                             name=self.__name if self.__sub_level == 0 else None,
-                            last_date=self.__last_download_date,
+                            last_date=Util.get_date(self.__last_download_date),
                             playlist_index=playlist_index,
                         ),
                     )
@@ -199,7 +201,10 @@ class Channel:
                             )
                         )
                         for _ in range(sleep_time >> 3):
-                            if self.__active:
+                            if (
+                                self.__halt_event is not None
+                                and not self.__halt_event.is_set()
+                            ):
                                 sleep(8)
                     return ret
                 else:
@@ -215,10 +220,10 @@ class Channel:
             return processor.download(item.original_url)
 
     def __set_attempt_date(self):
-        self.__last_attempt_date = datetime.strftime(datetime.now(), Util.date_fmt)
+        self.__last_attempt_date = int(time())
 
     def __set_download_date(self):
-        self.__last_download_date = datetime.strftime(datetime.now(), Util.date_fmt)
+        self.__last_download_date = int(time())
 
     def __reset_epoch_cutoff(self):
         self.__epoch_cutoff = None

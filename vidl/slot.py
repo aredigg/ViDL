@@ -1,5 +1,6 @@
 from queue import Queue
 from threading import Event, Lock, Thread
+from time import sleep
 from typing import TYPE_CHECKING, cast
 
 from yt_dlp import YoutubeDL
@@ -54,6 +55,7 @@ class Slot:
                     processor = self.__setup()
                 channel.set_halt_event(self.__halt_event)
                 channel.download(self.__index, processor, self.__view_queue)
+                sleep(3)
                 self.__channel = None
                 self.__ready = True
 

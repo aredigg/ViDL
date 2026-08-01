@@ -8,12 +8,14 @@ from .ansi import ANSI
 from .message import (
     ErrorMessage,
     FilePathMessage,
+    InfoMessage,
     InitMessage,
     ItemMessage,
     Message,
     Msg,
     PlaylistCountMessage,
     SleepMessage,
+    URLMessage,
     WarnMessage,
 )
 from .terminal import Terminal
@@ -100,6 +102,9 @@ class View:
             self.__temp_filepath = None
             self.__last_id = None
 
+        def get_id(self):
+            return self.__item_id
+
         def set_position(self, row, column):
             self.__pos = (row, column)
 
@@ -132,6 +137,9 @@ class View:
 
         def set_filepath(self, filepath):
             self.__temp_filepath = filepath
+
+        def get_top(self):
+            return self.__top_name
 
         def set_top(self, name, last_dl):
             if name is not None:
@@ -179,8 +187,12 @@ class View:
             self.__progress_percent = percent
             self.__progress_status = status
 
-        def set_status_message(self, provider, message):
-            self.__status_provider = provider
+        def set_status_message(self, provider: str, message):
+            self.__status_provider = (
+                provider.replace(":", " ").capitalize()
+                if provider is not None
+                else provider
+            )
             self.__status_message = message
 
         def update(self, terminal, full):
@@ -250,23 +262,23 @@ class View:
                 if self.__status == View.Status.ERROR:
                     line = (
                         line
-                        + " "
+                        + "  "
                         + f"{self.__status_provider}: "
                         + f"{ANSI.Color.Cerise}{self.__status_message}{ANSI.Color.DefaultFg}"
                     )
                 elif self.__status == View.Status.WARNING:
                     line = (
                         line
-                        + " "
+                        + "  "
                         + f"{self.__status_provider}: "
                         + f"{ANSI.Color.BurntSienna}{self.__status_message}{ANSI.Color.DefaultFg}"
                     )
                 else:
                     line = (
                         line
-                        + " "
-                        + f"{self.__status_provider}: "
-                        + f"{ANSI.Color.FashionBlue}{self.__status_message}{ANSI.Color.DefaultFg}"
+                        + "  "
+                        + f"{ANSI.Dim}{self.__status_provider}: {ANSI.DimReset}"
+                        + f"{ANSI.Color.NeonChartreuse}{self.__status_message}{ANSI.Color.DefaultFg}"
                     )
                 line_len = ANSI.len(line)
                 if line_len < w - 10:
@@ -279,30 +291,45 @@ class View:
                     terminal.print(line, r + 2, c + 6)
 
         def __item_line(self, terminal, r, c, h, w):
-            line = (
-                f"{self.__item_date:>10.10}"
-                + " │ "
-                + f"{self.__item_index:>4.4}"
-                + " │ "
-                + f"{self.__item_title}"
-            )
-            line_len = ANSI.len(line)
-            if line_len < w - 10:
-                line = line + " " * (w - 8 - line_len)
-                terminal.print(line, r + 4, c + 4)
-            if self.__item_title != self.__item_id:
-                line = f"[{self.__item_id}]"
+            if self.__item_date or self.__item_title or self.__item_id:
+                line = (
+                    f"{self.__item_date:>10.10}"
+                    + " │ "
+                    + f"{self.__item_index:>4.4}"
+                    + " │ "
+                    + f"{self.__item_title}"
+                )
                 line_len = ANSI.len(line)
                 if line_len < w - 10:
-                    terminal.print(line, r + 4, c + (w - 4 - line_len))
-            terminal.print(
-                ("─" * 11) + "┴" + ("─" * 6) + "┼" + ("─" * (w - 27)),
-                r + 5,
-                c + 4,
-            )
+                    line = line + " " * (w - 8 - line_len)
+                    terminal.print(line, r + 4, c + 4)
+                if self.__item_title != self.__item_id:
+                    line = f"[{self.__item_id}]"
+                    line_len = ANSI.len(line)
+                    if line_len < w - 10:
+                        terminal.print(line, r + 4, c + (w - 4 - line_len))
+                terminal.print(
+                    ("─" * 11) + "┴" + ("─" * 6) + "┼" + ("─" * (w - 27)),
+                    r + 5,
+                    c + 4,
+                )
+            else:
+                terminal.print(" " * (w - 2), r + 4, c + 1)
+                terminal.print(" " * (w - 2), r + 5, c + 1)
 
         def __media_line(self, terminal, r, c, h, w):
-            line = "│ " + f"{self.__media_length}"
+            start_line = "  "
+            if (
+                self.__media_length
+                or self.__progress_file_size_est is not None
+                or self.__media_extension
+                or self.__media_video_stats
+                or self.__media_audio_stats
+                or self.__media_audio_stats
+                or self.__media_subtitles
+            ):
+                start_line = "│ "
+            line = start_line + f"{self.__media_length}"
             if self.__progress_file_size_est is not None:
                 size = int(self.__progress_file_size_est) >> 20
                 line = line + " " + f"{size:>6} MB"
@@ -322,24 +349,36 @@ class View:
                 line = line + " " * 5
             if ANSI.len(line) < w - 30:
                 terminal.print(line, r + 6, c + 22)
-            line = "│ " + f"{self.__media_video_stats:<28.28}"
+            line = start_line + f"{self.__media_video_stats:<28.28}"
             if ANSI.len(line) < w - 30:
                 terminal.print(line, r + 7, c + 22)
-            line = "│ " + f"{self.__media_audio_stats:<28.28}"
+            line = start_line + f"{self.__media_audio_stats:<28.28}"
             if ANSI.len(line) < w - 30:
                 terminal.print(line, r + 8, c + 22)
-            line = "│ " + f"{self.__media_subtitles:<28.28}"
+            line = start_line + f"{self.__media_subtitles:<28.28}"
             if ANSI.len(line) < w - 30:
                 terminal.print(line, r + 9, c + 22)
 
         def __status_icon(self):
             match self.__status:
                 case View.Status.INACTIVE:
-                    return ANSI.Dim + "○" + ANSI.DimReset
+                    return (
+                        ANSI.Dim
+                        + ANSI.Color.Cerise
+                        + "○"
+                        + ANSI.Color.DefaultFg
+                        + ANSI.DimReset
+                    )
                 case View.Status.WAITING:
-                    return ANSI.Blink + "○" + ANSI.BlinkReset
+                    return (
+                        ANSI.Blink
+                        + ANSI.Color.Cerise
+                        + "●"
+                        + ANSI.Color.DefaultFg
+                        + ANSI.BlinkReset
+                    )
                 case View.Status.SLEEPING:
-                    return " "
+                    return ANSI.Color.Cerise + "○" + ANSI.Color.DefaultFg
                 case View.Status.DOWNLOADING:
                     return ANSI.Color.Cerise + "●" + ANSI.Color.DefaultFg
                 case View.Status.PROCESSING:
@@ -403,9 +442,13 @@ class View:
                     message = self.__queue.get(block=False)
                     if message.kind != Msg.HALT:
                         try:
-                            self.__slots[message.body.index].set_status_message(
-                                None, None
-                            )
+                            if (
+                                self.__slots[message.body.index].get_status()
+                                == View.Status.INACTIVE
+                            ):
+                                self.__slots[message.body.index].set_status_message(
+                                    None, None
+                                )
                         except KeyError:
                             ...
                         match message.kind:
@@ -425,6 +468,10 @@ class View:
                             case Msg.INFO:
                                 if isinstance(message.body, FilePathMessage):
                                     self.__update_filepath(message.body)
+                                elif isinstance(message.body, URLMessage):
+                                    self.__update_url_message(message.body)
+                                elif isinstance(message.body, InfoMessage):
+                                    self.__update_info_message(message.body)
                             case Msg.WARN:
                                 if isinstance(message.body, WarnMessage):
                                     self.__update_warning(message.body)
@@ -487,10 +534,14 @@ class View:
             if body.provider == "download":
                 self.__slots[body.index].set_timer(body.time_offset + 1)
                 self.__slots[body.index].set_status(View.Status.WAITING)
-            elif body.provider == "channel":
-                self.__slots[body.index].set_timer(body.time_offset + 1)
+            elif body.provider == "channel" or body.provider == "sub_channel":
+                self.__slots[body.index].set_timer(body.time_offset)
                 self.__slots[body.index].reset()
-                self.__slots[body.index].set_item("Sleeping", None, 0, "Sleeping")
+                if body.provider == "sub_channel":
+                    self.__slots[body.index].set_top("", "")
+                self.__slots[body.index].set_status_message(
+                    "Sleeping", Util.get_time(int(time()) + body.time_offset)
+                )
                 self.__slots[body.index].set_status(View.Status.SLEEPING)
 
     def __update_item(self, body):
@@ -570,6 +621,21 @@ class View:
                 self.__slots[body.index].set_filepath(body.path)
                 self.__slots[body.index].set_status(View.Status.DOWNLOADING)
 
+    def __update_url_message(self, body):
+        pass
+        # if body.index in self.__slots:
+        # self.__slots[body.index].set_status_message(body.provider, body.url)
+        # self.__slots[body.index].set_status(View.Status.PROCESSING)
+
+    def __update_info_message(self, body):
+        if body.index in self.__slots:
+            if body.message == "Downloading":
+                self.__slots[body.index].set_status_message(body.provider, body.target)
+                self.__slots[body.index].set_status(View.Status.PROCESSING)
+            if body.message == "Metadata":
+                self.__slots[body.index].set_status_message(body.provider, body.target)
+                self.__slots[body.index].set_status(View.Status.PROCESSING)
+
     def __update_count(self, body):
         if body.index in self.__slots:
             if body.provider == "channel":
@@ -582,5 +648,13 @@ class View:
 
     def __update_error(self, body):
         if body.index in self.__slots:
-            self.__slots[body.index].set_status_message(body.provider, body.message)
+            message = body.message.split(":", maxsplit=1)
+            if len(message) > 1:
+                provider = message[0]
+                message = message[1]
+                self.__slots[body.index].set_status_message(provider, message)
+            else:
+                self.__slots[body.index].set_status_message(
+                    f"{body.provider}/{body.target}", body.message
+                )
             self.__slots[body.index].set_status(View.Status.ERROR)

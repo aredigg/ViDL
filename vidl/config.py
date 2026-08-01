@@ -23,7 +23,7 @@ class Config:
             "minimum_resolution": 0,
             "minimum_duration": 0,
             "playlist_cutoff": 0,
-            "sleep_interval": 10,
+            "sleep_interval": 60,
         },
         "Debug": {
             "file_name": "debug",
@@ -39,7 +39,7 @@ class Config:
         "retries": 5,
         "sleep_interval": 10,
         "max_sleep_interval": 10,
-        "sleep_interval_requests": 0.01,
+        "sleep_interval_requests": 1,
         "paths": {},
         "cookiesfrombrowser": ("safari", None, None, None),
         "outtmpl": "%(channel)s/%(timestamp>%Y-%m)s/%(id)s.%(ext)s",

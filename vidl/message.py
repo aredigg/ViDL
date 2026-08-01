@@ -43,6 +43,7 @@ class WarnMessage(ProviderMessage):
 
 @dataclass
 class ErrorMessage(ProviderMessage):
+    target: None | str
     message: None | str
 
 

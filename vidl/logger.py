@@ -54,12 +54,14 @@ class Logger:
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
         message = message.removeprefix("ERROR: ")
         if provider is not None:
+            target, provider_message = self.__parse(provider_message)
             self.__view_queue.put(
                 Message(
                     kind=Msg.ERROR,
                     body=ErrorMessage(
                         index=self.__slot_index,
                         provider=provider,
+                        target=target,
                         message=provider_message,
                     ),
                 )
@@ -74,6 +76,7 @@ class Logger:
                     body=ErrorMessage(
                         index=self.__slot_index,
                         provider="logger",
+                        target=None,
                         message=message,
                     ),
                 )
@@ -130,12 +133,26 @@ class Logger:
         if match := self.__parse_suffix(": Downloading webpage", message):
             self.__view_queue.put(
                 Message(
-                    kind=Msg.WARN,
+                    kind=Msg.INFO,
                     body=InfoMessage(
                         index=self.__slot_index,
                         provider=provider,
                         target=match,
                         message="Downloading",
+                    ),
+                )
+            )
+            return
+
+        if match := self.__parse_suffix(": Downloading JSON metadata", message):
+            self.__view_queue.put(
+                Message(
+                    kind=Msg.INFO,
+                    body=InfoMessage(
+                        index=self.__slot_index,
+                        provider=provider,
+                        target=match,
+                        message="Metadata",
                     ),
                 )
             )
@@ -168,6 +185,7 @@ class Logger:
         return None
 
     def __temp_writer(self, message):
+        pass
         # print(message)
-        with open(f"temp_debug_{self.__slot_index}.log", "a") as f:
-            f.write(f"{message}\n")
+        # with open(f"temp_debug_{self.__slot_index}.log", "a") as f:
+        #    f.write(f"{message}\n")

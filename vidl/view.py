@@ -569,7 +569,7 @@ class View:
                 if item.elapsed and item.downloaded_bytes:
                     bitrate = int((item.downloaded_bytes << 3) / item.elapsed) >> 10
                 rem_bits = int(item.total_bytes - item.downloaded_bytes) >> 7
-                remaining = int(rem_bits / bitrate)
+                remaining = int(rem_bits / bitrate) if bitrate != 0 else None
                 slot.set_progress(
                     item.elapsed,
                     remaining,

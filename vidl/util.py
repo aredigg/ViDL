@@ -3,6 +3,7 @@ from datetime import datetime
 
 class Util:
     date_fmt = "%Y-%m-%d"
+    time_fmt = "%H:%M"
 
     @staticmethod
     def format_seconds(seconds, include_seconds=True, two_parts=True):
@@ -25,7 +26,17 @@ class Util:
         return f"{hr:02}:{mn:02}"
 
     @staticmethod
-    def get_time(epoch=None):
+    def get_date(epoch=None):
+        if epoch == 0:
+            return ""
         if epoch is None:
             return datetime.strftime(datetime.now(), Util.date_fmt)
         return datetime.strftime(datetime.fromtimestamp(epoch), Util.date_fmt)
+
+    @staticmethod
+    def get_time(epoch=None):
+        if epoch == 0:
+            return ""
+        if epoch is None:
+            return datetime.strftime(datetime.now(), Util.time_fmt)
+        return datetime.strftime(datetime.fromtimestamp(epoch), Util.time_fmt)

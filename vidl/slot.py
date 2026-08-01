@@ -60,6 +60,7 @@ class Slot:
     def __setup(self):
         hook = Hook(self.__view_queue, self.__halt_event, self.__index)
         settings = Config.ydl_settings
+        settings["max_sleep_interval"] = Config.settings["Download"]["sleep_interval"]
         settings["paths"]["home"] = Config.settings["Paths"]["output"]
         settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]
         settings["download_archive"] = Config.settings["Channels"]["archived"]

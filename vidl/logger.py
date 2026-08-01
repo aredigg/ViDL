@@ -56,7 +56,7 @@ class Logger:
         if provider is not None:
             self.__view_queue.put(
                 Message(
-                    kind=Msg.WARN,
+                    kind=Msg.ERROR,
                     body=ErrorMessage(
                         index=self.__slot_index,
                         provider=provider,
@@ -70,7 +70,7 @@ class Logger:
         else:
             self.__view_queue.put(
                 Message(
-                    kind=Msg.WARN,
+                    kind=Msg.ERROR,
                     body=ErrorMessage(
                         index=self.__slot_index,
                         provider="logger",

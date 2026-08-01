@@ -55,6 +55,7 @@ class Item:
     fragment_index: int
     fragment_count: int
     speed: float
+    eta: float
     _percent: float
 
     def valid_format(self):
@@ -86,6 +87,7 @@ class Item:
             data.get("fragment_index") or 0,
             data.get("fragment_count") or 0,
             data.get("speed") or 0.0,
+            data.get("eta") or 0,
             data.get("_percent") or 0.0,
         )
 

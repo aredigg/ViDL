@@ -1,34 +1,31 @@
+import os
 from enum import Enum
 from queue import Empty, Queue
 from threading import Event, Thread
 from time import sleep, time
 
-from .item import Item
+from .ansi import ANSI
 from .message import (
+    ErrorMessage,
+    FilePathMessage,
     InitMessage,
     ItemMessage,
     Message,
     Msg,
     PlaylistCountMessage,
     SleepMessage,
+    WarnMessage,
 )
 from .terminal import Terminal
 from .util import Util
 
-# slot index, status_icon, timer, playlist_name (len)
-# item_id, item_index, date, item_title
-# video_length, video_stats, audio_stats, extension, file_size
-# progress (time/time) (size/size)
-
-# 01 X 00:00 Playlist Name (99) 2026-06-01
-# abcdefghijkl  75 2026-07-01 Item name can be long
-# 00:00:00 2000x1000 @60 SDR AVC1 44100x2 MP4A EN-US LIVE/STREAM 15
-#  > XXXXXXXXXXXXXXX..... < 00:00/00:00 1200/3600 MB ETA 23:00
-#  > ERROR: xxx
-
 
 class View:
     index = 0
+    ROW_SIZE = 12
+    COL_SIZE = 120
+    HEAD_SIZE = 5
+    FULL_INTERVAL_COUNT = 4
 
     class Status(Enum):
         INACTIVE = 0
@@ -42,11 +39,41 @@ class View:
     class Slot:
         def __init__(self, index) -> None:
             self.__index = index
+            self.__pos = None
+            self.__size = None
             self.__status = View.Status.INACTIVE
             self.__timer = None
             self.__top_name = ""
             self.__top_name_count = ""
             self.__top_name_last_dl = ""
+            self.__item_id = ""
+            self.__item_count = 0
+            self.__item_index = ""
+            self.__item_date = ""
+            self.__item_title = ""
+            self.__media_length = ""
+            self.__media_video_stats = ""
+            self.__media_audio_stats = ""
+            self.__media_subtitles = ""
+            self.__media_extension = ""
+            self.__media_live_state = ""
+            self.__media_age_limit = ""
+            self.__progress_time = None
+            self.__progress_time_est = None
+            self.__progress_file_size = None
+            self.__progress_file_size_est = None
+            self.__progress_frag_index = None
+            self.__progress_frag_count = None
+            self.__progress_bitrate = None
+            self.__progress_eta = None
+            self.__progress_percent = None
+            self.__progress_status = None
+            self.__status_provider = None
+            self.__status_message = None
+            self.__temp_filepath = None
+            self.__last_id = None
+
+        def reset(self):
             self.__item_id = ""
             self.__item_index = ""
             self.__item_date = ""
@@ -55,16 +82,41 @@ class View:
             self.__media_video_stats = ""
             self.__media_audio_stats = ""
             self.__media_subtitles = ""
-            self.__media_extenstion = ""
+            self.__media_extension = ""
             self.__media_live_state = ""
             self.__media_age_limit = ""
             self.__progress_time = None
             self.__progress_time_est = None
             self.__progress_file_size = None
             self.__progress_file_size_est = None
+            self.__progress_frag_index = None
+            self.__progress_frag_count = None
+            self.__progress_bitrate = None
             self.__progress_eta = None
-            self.__status_provider = ""
-            self.__status_message = ""
+            self.__progress_percent = None
+            self.__progress_status = None
+            self.__status_provider = None
+            self.__status_message = None
+            self.__temp_filepath = None
+            self.__last_id = None
+
+        def set_position(self, row, column):
+            self.__pos = (row, column)
+
+        def get_position(self):
+            return self.__pos
+
+        def is_position(self, row, column):
+            return (row, column) == self.__pos
+
+        def set_size(self, slot_size):
+            self.__size = slot_size
+
+        def set_status(self, status):
+            self.__status = status
+
+        def get_status(self):
+            return self.__status
 
         def set_timer(self, time_offset):
             self.__timer = int(time()) + time_offset
@@ -76,6 +128,10 @@ class View:
 
         def set_count(self, count):
             self.__top_name_count = f"({count})"
+            self.__item_count = count
+
+        def set_filepath(self, filepath):
+            self.__temp_filepath = filepath
 
         def set_top(self, name, last_dl):
             if name is not None:
@@ -85,8 +141,9 @@ class View:
 
         def set_item(self, id, index, item_date, title):
             self.__item_id = id
-            self.__item_index = str(index)
-            self.__item_date = Util.get_time(item_date)
+            if index:
+                self.__item_index = str(self.__item_count - index + 1)
+            self.__item_date = Util.get_date(item_date)
             self.__item_title = title
 
         def set_media(self, length, video, audio, subtitle, extension, live, age):
@@ -94,79 +151,227 @@ class View:
             self.__media_video_stats = video
             self.__media_audio_stats = audio
             self.__media_subtitles = subtitle
-            self.__media_extenstion = extension
+            self.__media_extension = extension
             self.__media_live_state = live
             self.__media_age_limit = age
 
-        def set_progress(self, time_curr, time_est, size_curr, size_est, eta):
+        def set_progress(
+            self,
+            time_curr,
+            time_est,
+            size_curr,
+            size_est,
+            frag_i,
+            frag_c,
+            bitrate,
+            eta,
+            percent,
+            status,
+        ):
             self.__progress_time = time_curr
             self.__progress_time_est = time_est
             self.__progress_file_size = size_curr
             self.__progress_file_size_est = size_est
+            self.__progress_frag_index = frag_i
+            self.__progress_frag_count = frag_c
+            self.__progress_bitrate = bitrate
             self.__progress_eta = eta
+            self.__progress_percent = percent
+            self.__progress_status = status
 
-        def set_status(self, provider, message):
+        def set_status_message(self, provider, message):
             self.__status_provider = provider
             self.__status_message = message
 
-        def output(self, line):
-            match line:
-                case 0:
-                    return (
-                        f"{str(self.__index + 1):>2.2} "
-                        + f"{self.__status_icon()} "
-                        + f"{self.timer()} "
-                        + f"{self.__top_name} "
-                        + f"{self.__top_name_count} "
-                        + f"{self.__top_name_last_dl}"
+        def update(self, terminal, full):
+            if self.__pos is not None and self.__size is not None:
+                row, col = self.__pos
+                hgt, wdt = self.__size
+                row, col = ((row * hgt) + View.HEAD_SIZE, (col * wdt) + 1)
+                if full or self.__item_id != self.__last_id:
+                    self.__item_line(terminal, row, col, hgt, wdt)
+                    self.__media_line(terminal, row, col, hgt, wdt)
+                    self.__border(terminal, row, col, hgt, wdt)
+                    if self.__temp_filepath is not None:
+                        self.__update_filesize()
+                    self.__last_id = self.__item_id
+                self.__status_line(terminal, row, col, hgt, wdt)
+
+        def __border(self, terminal, r, c, h, w):
+            title = ""
+            if len(self.__top_name) < w - 12:
+                title = " │ " + f"{self.__top_name} {self.__top_name_count}"
+            header = (
+                ""
+                + ANSI.Inverse
+                + " "
+                + f"{str(self.__index + 1):>2.2}"
+                + title
+                + " "
+                + ANSI.InverseReset
+                + ""
+            )
+            terminal.print(
+                "╭" + ("─" * 2) + header + ("─" * (w - 4 - ANSI.len(header))) + "╮",
+                r,
+                c,
+            )
+            for rb in range(r + 1, r + h - 1):
+                terminal.print("│", rb, c)
+                terminal.print("│", rb, c + w - 1)
+            terminal.print("╰" + ("─" * (w - 2)) + "╯", r + h - 1, c)
+
+        def __status_line(self, terminal, r, c, h, w):
+            line = f"{self.__status_icon()}" + "  " + f"{self.timer()}"
+            if self.__status == View.Status.DOWNLOADING:
+                if self.__progress_time_est is not None:
+                    remaining_time = Util.format_seconds(self.__progress_time_est)
+                    eta = f"ETA {Util.get_time(int(time()) + self.__progress_time_est)}"
+                    length = (
+                        w
+                        - ANSI.len(line)
+                        - ANSI.len(remaining_time)
+                        - ANSI.len(eta)
+                        - 19
                     )
-                case 1:
-                    return (
-                        f"{self.__item_id:>20.20} "
-                        + f"{self.__item_date:>10.10} "
-                        + f"{self.__item_index:>4.4} "
-                        + f"{self.__item_title}"
+                    meter = self.__progress_meter(length, self.__progress_percent, "━")
+                    line = line + " / " + remaining_time + "  " + meter + "  " + eta
+                    terminal.print(line, r + 2, c + 6)
+                elif self.__progress_file_size:
+                    size = int(self.__progress_file_size) >> 20
+                    line = line + " " + f"{size:>6} MB"
+                    line_len = ANSI.len(line)
+                    if line_len < w - 10:
+                        line = line + " " * (w - 10 - line_len)
+                        terminal.print(line, r + 2, c + 6)
+            elif (
+                self.__status_provider is not None and self.__status_message is not None
+            ):
+                if self.__status == View.Status.ERROR:
+                    line = (
+                        line
+                        + " "
+                        + f"{self.__status_provider}: "
+                        + f"{ANSI.Color.Cerise}{self.__status_message}{ANSI.Color.DefaultFg}"
                     )
-                case 2:
-                    return (
-                        f"{self.__media_length} "
-                        + f"{self.__media_video_stats} "
-                        + f"{self.__media_audio_stats} "
-                        + f"{self.__media_subtitles} "
-                        + f"{self.__media_extenstion} "
-                        + f"{self.__media_live_state} "
-                        + f"{self.__media_age_limit} "
+                elif self.__status == View.Status.WARNING:
+                    line = (
+                        line
+                        + " "
+                        + f"{self.__status_provider}: "
+                        + f"{ANSI.Color.BurntSienna}{self.__status_message}{ANSI.Color.DefaultFg}"
                     )
-                case 3:
-                    if self.__status == View.Status.DOWNLOADING:
-                        return (
-                            f"{self.__progress_meter()} "
-                            + f"{self.__progress_time}/{self.__progress_time_est} "
-                            + f"{self.__progress_file_size}/{self.__progress_file_size_est} MB "
-                            + f"ETA {self.__progress_eta}"
-                        )
-                    else:
-                        return f"{self.__status_provider} " + f"{self.__status_message}"
+                else:
+                    line = (
+                        line
+                        + " "
+                        + f"{self.__status_provider}: "
+                        + f"{ANSI.Color.FashionBlue}{self.__status_message}{ANSI.Color.DefaultFg}"
+                    )
+                line_len = ANSI.len(line)
+                if line_len < w - 10:
+                    line = line + " " * (w - 10 - line_len)
+                    terminal.print(line, r + 2, c + 6)
+            else:
+                line_len = ANSI.len(line)
+                if line_len < w - 10:
+                    line = line + " " * (w - 10 - line_len)
+                    terminal.print(line, r + 2, c + 6)
+
+        def __item_line(self, terminal, r, c, h, w):
+            line = (
+                f"{self.__item_date:>10.10}"
+                + " │ "
+                + f"{self.__item_index:>4.4}"
+                + " │ "
+                + f"{self.__item_title}"
+            )
+            line_len = ANSI.len(line)
+            if line_len < w - 10:
+                line = line + " " * (w - 8 - line_len)
+                terminal.print(line, r + 4, c + 4)
+            if self.__item_title != self.__item_id:
+                line = f"[{self.__item_id}]"
+                line_len = ANSI.len(line)
+                if line_len < w - 10:
+                    terminal.print(line, r + 4, c + (w - 4 - line_len))
+            terminal.print(
+                ("─" * 11) + "┴" + ("─" * 6) + "┼" + ("─" * (w - 27)),
+                r + 5,
+                c + 4,
+            )
+
+        def __media_line(self, terminal, r, c, h, w):
+            line = "│ " + f"{self.__media_length}"
+            if self.__progress_file_size_est is not None:
+                size = int(self.__progress_file_size_est) >> 20
+                line = line + " " + f"{size:>6} MB"
+            else:
+                line = line + " " * 10
+            line = (
+                line
+                + " "
+                + f"{self.__media_extension.upper():<4.4}"
+                + " "
+                + f"{self.__media_live_state:>6.6}"
+            )
+
+            if self.__media_age_limit:
+                line = line + " " + f"({self.__media_age_limit})"
+            else:
+                line = line + " " * 5
+            if ANSI.len(line) < w - 30:
+                terminal.print(line, r + 6, c + 22)
+            line = "│ " + f"{self.__media_video_stats:<28.28}"
+            if ANSI.len(line) < w - 30:
+                terminal.print(line, r + 7, c + 22)
+            line = "│ " + f"{self.__media_audio_stats:<28.28}"
+            if ANSI.len(line) < w - 30:
+                terminal.print(line, r + 8, c + 22)
+            line = "│ " + f"{self.__media_subtitles:<28.28}"
+            if ANSI.len(line) < w - 30:
+                terminal.print(line, r + 9, c + 22)
 
         def __status_icon(self):
             match self.__status:
                 case View.Status.INACTIVE:
-                    return "○"
+                    return ANSI.Dim + "○" + ANSI.DimReset
                 case View.Status.WAITING:
-                    return "○"
+                    return ANSI.Blink + "○" + ANSI.BlinkReset
                 case View.Status.SLEEPING:
-                    return "○"
+                    return " "
                 case View.Status.DOWNLOADING:
-                    return "●"
+                    return ANSI.Color.Cerise + "●" + ANSI.Color.DefaultFg
                 case View.Status.PROCESSING:
-                    return "●"
+                    return ANSI.Color.PineGreen + "●" + ANSI.Color.DefaultFg
                 case View.Status.WARNING:
-                    return "○"
+                    return ANSI.Color.BurntSienna + "○" + ANSI.Color.DefaultFg
                 case View.Status.ERROR:
-                    return "○"
+                    return ANSI.Color.Cerise + "○" + ANSI.Color.DefaultFg
 
-        def __progress_meter(self):
-            return ""
+        def __progress_meter(self, length, percent, kind="-"):
+            progress = int((length * percent) / 100)
+            remaining = length - progress
+            meter = kind * progress + ANSI.Dim + kind * remaining + ANSI.DimReset
+            return meter
+
+        def __progress_meter_long(self, length, percent):
+            pad = ""
+            if length & 1:
+                pad = " "
+            length = length >> 1
+            progress = int((length * percent) / 100)
+            remaining = length - progress
+            meter = pad + "╺╸" * progress + ANSI.Dim + "╺╸" * remaining + ANSI.DimReset
+            return meter
+
+        def __update_filesize(self):
+            if self.__temp_filepath is not None:
+                for filename in [self.__temp_filepath, self.__temp_filepath + ".part"]:
+                    try:
+                        self.__progress_file_size = os.path.getsize(filename)
+                    except FileNotFoundError, OSError:
+                        ...
 
     def __init__(self) -> None:
         self.__ready = False
@@ -177,6 +382,9 @@ class View:
         self.__thread.start()
         View.index += 1
         self.__slots = {}
+        self.__columns = 0
+        self.__rows = 0
+        self.__slot_size = None
 
     def get_queues(self):
         return self.__queue, self.__input_queue
@@ -186,11 +394,20 @@ class View:
 
     def __run(self):
         with Terminal(self.__input_queue) as terminal:
+            self.__term_size(terminal=terminal)
+            self.__term_header(terminal=terminal)
             self.__ready = True
+            full_count = View.FULL_INTERVAL_COUNT
             while not self.__halt_event.is_set():
                 try:
                     message = self.__queue.get(block=False)
                     if message.kind != Msg.HALT:
+                        try:
+                            self.__slots[message.body.index].set_status_message(
+                                None, None
+                            )
+                        except KeyError:
+                            ...
                         match message.kind:
                             case Msg.INIT:
                                 if isinstance(message.body, InitMessage):
@@ -199,16 +416,31 @@ class View:
                                     self.__update_item(message.body)
                                 elif isinstance(message.body, PlaylistCountMessage):
                                     self.__update_count(message.body)
+                            case Msg.UPDATE:
+                                if isinstance(message.body, ItemMessage):
+                                    self.__update_item(message.body)
                             case Msg.SLEEP:
                                 if isinstance(message.body, SleepMessage):
                                     self.__update_sleep(message.body)
+                            case Msg.INFO:
+                                if isinstance(message.body, FilePathMessage):
+                                    self.__update_filepath(message.body)
+                            case Msg.WARN:
+                                if isinstance(message.body, WarnMessage):
+                                    self.__update_warning(message.body)
+                            case Msg.ERROR:
+                                if isinstance(message.body, ErrorMessage):
+                                    self.__update_error(message.body)
                 except Empty:
-                    for slot_index, slot in self.__slots.items():
-                        terminal.print(slot.output(0), (slot_index * 4) + 1, 1)
-                        terminal.print(slot.output(1), (slot_index * 4) + 2, 1)
-                        terminal.print(slot.output(2), (slot_index * 4) + 3, 1)
-                        terminal.print(slot.output(3), (slot_index * 4) + 4, 1)
-                    sleep(0.5)
+                    if full_count == 0:
+                        for slot in self.__slots.values():
+                            slot.update(terminal, True)
+                        full_count = View.FULL_INTERVAL_COUNT
+                    else:
+                        for slot in self.__slots.values():
+                            slot.update(terminal, False)
+                        full_count -= 1
+                    sleep(0.25)
 
     def halt(self):
         self.__ready = False
@@ -218,43 +450,137 @@ class View:
     def join(self):
         self.__thread.join()
 
+    def __term_size(self, terminal):
+        height, width = terminal.get_size()
+        self.__rows = max(1, (height - View.HEAD_SIZE) // View.ROW_SIZE)
+        self.__columns = max(1, (width - 1) // View.COL_SIZE)
+        self.__slot_size = (View.ROW_SIZE, width // self.__columns)
+
+    def __term_header(self, terminal):
+        _, width = terminal.get_size()
+        line = "ViDL"
+        if ANSI.len(line) < width - 10:
+            terminal.print(line, 2, 10)
+
     def __create_slot(self, body):
         if body.provider == "slot":
-            self.__slots[body.index] = View.Slot(body.index)
+            slot = View.Slot(body.index)
+            self.__assign_position(slot)
+            self.__slots[body.index] = slot
+
+    def __assign_position(self, slot):
+        for row in range(self.__rows):
+            for column in range(self.__columns):
+                occupied = any(
+                    current_slot.is_position(row, column)
+                    for current_slot in self.__slots.values()
+                )
+                if not occupied:
+                    slot.set_position(row, column)
+                    slot.set_size(self.__slot_size)
+                    return
+
+    # TODO: Plan for overflow and reflow when size changes
 
     def __update_sleep(self, body):
         if body.index in self.__slots:
             if body.provider == "download":
-                self.__slots[body.index].set_timer(body.time_offset)
+                self.__slots[body.index].set_timer(body.time_offset + 1)
+                self.__slots[body.index].set_status(View.Status.WAITING)
+            elif body.provider == "channel":
+                self.__slots[body.index].set_timer(body.time_offset + 1)
+                self.__slots[body.index].reset()
+                self.__slots[body.index].set_item("Sleeping", None, 0, "Sleeping")
+                self.__slots[body.index].set_status(View.Status.SLEEPING)
 
     def __update_item(self, body):
         if body.index in self.__slots:
+            item = body.item
+            slot = self.__slots[body.index]
             if body.provider == "channel":
-                item: Item = body.item
-                slot: View.Slot = self.__slots[body.index]
                 slot.set_top(body.name, body.last_date)
                 slot.set_item(item.id, body.playlist_index, item.timestamp, item.title)
-                video_stat = f"{item.width:>4}x{item.height:<4}@{int(item.fps)}({item.dynamic_range.upper()})({item.vcodec.upper()})"
-                audio_stat = f"{item.asr}x{item.audio_channels} {item.acodec.upper()}"
-                subtitle_stat = ""
-                live_stat = ""
-                if item.is_live:
-                    live_stat = "LIVE"
-                elif item.live_status in ("is_upcoming", "was_live", "post_live"):
-                    live_stat = "STREAM"
-                slot.set_media(
-                    item.duration,
-                    video_stat,
-                    audio_stat,
-                    subtitle_stat,
-                    item.ext,
-                    live_stat,
-                    item.age_limit,
-                )
+                slot.set_filepath(None)
+                self.__update_item_media(slot, item)
             elif body.provider == "hook":
-                ...
+                if slot.get_status() != View.Status.DOWNLOADING:
+                    self.__update_item_media(slot, item)
+                if (
+                    item.processor.lower() == "progress"
+                    and item.status.lower() == "downloading"
+                ):
+                    slot.set_status(View.Status.DOWNLOADING)
+                elif item.status.lower() == "finished":
+                    slot.set_status(View.Status.INACTIVE)
+                else:
+                    slot.set_status(View.Status.PROCESSING)
+                bitrate = int(item.tbr)
+                if item.elapsed and item.downloaded_bytes:
+                    bitrate = int((item.downloaded_bytes << 3) / item.elapsed) >> 10
+                rem_bits = int(item.total_bytes - item.downloaded_bytes) >> 7
+                remaining = int(rem_bits / bitrate)
+                slot.set_progress(
+                    item.elapsed,
+                    remaining,
+                    item.downloaded_bytes,
+                    item.total_bytes,
+                    item.fragment_index,
+                    item.fragment_count,
+                    bitrate,
+                    item.eta,
+                    item._percent,
+                    (item.processor, item.status),
+                )
+                processes = {
+                    "Merger": "Merge",
+                    "MoveFiles": "Move",
+                    "FixupM3u8": "Normalize",
+                    "": "Unknown",
+                }
+                if item.processor != "progress":
+                    self.__slots[body.index].set_status_message(
+                        processes[item.processor], item.status
+                    )
+
+    def __update_item_media(self, slot, item):
+        video_stat = audio_stat = subtitle_stat = live_stat = ""
+        if item.width and item.height:
+            video_stat = f"{str(item.width):>4.4}x{str(item.height):<4.4} @ {str(int(item.fps)):<3.3} {item.dynamic_range.upper():<6.6} {item.vcodec.upper()}"
+        if item.asr and item.audio_channels:
+            audio_stat = f"{str(item.asr):>6.6}x{str(item.audio_channels):<2.2} {item.acodec.upper()}"
+        if item.is_live:
+            live_stat = "LIVE"
+            if not item.timestamp:
+                slot.set_item(item.id, 0, item.epoch, item.title)
+        elif item.live_status in ("is_upcoming", "was_live", "post_live"):
+            live_stat = "STREAM"
+        slot.set_media(
+            item.duration,
+            video_stat,
+            audio_stat,
+            subtitle_stat,
+            item.ext,
+            live_stat,
+            item.age_limit,
+        )
+
+    def __update_filepath(self, body):
+        if body.index in self.__slots:
+            if body.provider == "download":
+                self.__slots[body.index].set_filepath(body.path)
+                self.__slots[body.index].set_status(View.Status.DOWNLOADING)
 
     def __update_count(self, body):
         if body.index in self.__slots:
             if body.provider == "channel":
                 self.__slots[body.index].set_count(body.playlist_count)
+
+    def __update_warning(self, body):
+        if body.index in self.__slots:
+            self.__slots[body.index].set_status_message(body.target, body.message)
+            self.__slots[body.index].set_status(View.Status.WARNING)
+
+    def __update_error(self, body):
+        if body.index in self.__slots:
+            self.__slots[body.index].set_status_message(body.provider, body.message)
+            self.__slots[body.index].set_status(View.Status.ERROR)

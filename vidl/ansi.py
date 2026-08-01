@@ -4,6 +4,16 @@ from .unicode import Unicode
 
 
 class ANSI:
+    Inverse = "\x1b[7m"
+    InverseReset = "\x1b[27m"
+
+    Blink = "\x1b[5m"
+    BlinkReset = "\x1b[25m"
+
+    Bold = "\x1b[1m"
+    Dim = "\x1b[2m"
+    BoldReset = DimReset = "\x1b[22m"
+
     class Alternate:
         Enter = "\x1b[?1049h\x1b[?25l"
         Leave = "\x1b[?25h\x1b[?1049l"
@@ -11,7 +21,7 @@ class ANSI:
     class Color:
         @staticmethod
         def __get_rgb(hex):
-            hex.removeprefix("#")
+            hex = hex.removeprefix("#")
             assert len(hex) == 6
             return int(hex[0:2], 16), int(hex[2:4], 16), int(hex[4:6], 16)
 
@@ -24,6 +34,14 @@ class ANSI:
         def bg(hex):
             r, g, b = ANSI.Color.__get_rgb(hex)
             return f"\x1b[48;2;{r};{g};{b}m"
+
+        DefaultFg = "\033[39m"
+        DefaultBg = "\033[49m"
+
+        Cerise = "\x1b[38;2;217;56;106m"
+        BurntSienna = "\x1b[38;2;227;114;86m"
+        PineGreen = "\x1b[38;2;32;109;75m"
+        FashionBlue = "\x1b[38;2;36;59;211m"
 
     @staticmethod
     def remove(string):
@@ -38,7 +56,7 @@ class ANSI:
         return f"\x1b]9;{string}\x1b\\"
 
     @staticmethod
-    def print(string, row=1, col=1):
+    def print(string="", row=1, col=1):
         return f"\x1b[{row};{col}H{string}"
 
     @staticmethod

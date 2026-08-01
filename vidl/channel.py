@@ -1,8 +1,8 @@
 from datetime import datetime
-from time import time
+from time import sleep, time
 
 from .item import Item
-from .message import ItemMessage, Message, Msg, PlaylistCountMessage
+from .message import ItemMessage, Message, Msg, PlaylistCountMessage, SleepMessage
 from .util import Util
 
 
@@ -184,7 +184,24 @@ class Channel:
             else:
                 self.__item = Item.get_item(info)
                 if self.__item.valid_format() and self.__item.within_cutoff(self):
-                    return self.__download(processor)
+                    process_time = int(time())
+                    ret = self.__download(processor)
+                    sleep_time = min(3600, int(time()) - process_time)
+                    if self.__slot_index is not None:
+                        queue.put(
+                            Message(
+                                kind=Msg.SLEEP,
+                                body=SleepMessage(
+                                    index=self.__slot_index,
+                                    provider="channel",
+                                    time_offset=sleep_time,
+                                ),
+                            )
+                        )
+                        for _ in range(sleep_time >> 3):
+                            if self.__active:
+                                sleep(8)
+                    return ret
                 else:
                     self.__set_error("No formats or outside cutoff")
                     return False

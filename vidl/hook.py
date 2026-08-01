@@ -27,11 +27,5 @@ class Hook:
             )
         )
 
-        # self.__temp_writer(f"HKK {self.__slot_index} --> Hook")
         if self.__halt_event.is_set():
             raise DownloadCancelled("Download cancelled due to halt")
-
-    def __temp_writer(self, message):
-        # print(message)
-        with open(f"temp_hook_{self.__slot_index}.log", "a") as f:
-            f.write(f"{message}\n")

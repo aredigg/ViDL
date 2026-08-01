@@ -23,6 +23,7 @@ class Config:
             "minimum_resolution": 0,
             "minimum_duration": 0,
             "playlist_cutoff": 0,
+            "sleep_interval": 10,
         },
         "Debug": {
             "file_name": "debug",
@@ -37,7 +38,7 @@ class Config:
         "multistreams": True,
         "retries": 5,
         "sleep_interval": 10,
-        "max_sleep_interval": 60,
+        "max_sleep_interval": 10,
         "sleep_interval_requests": 0.01,
         "paths": {},
         "cookiesfrombrowser": ("safari", None, None, None),

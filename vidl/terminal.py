@@ -39,4 +39,4 @@ class Terminal:
         if ANSI.len(string) > remaining_space:
             string = ANSI.trim(string, remaining_space)
         print(ANSI.print(string, row, col), end="")
-        print(ANSI.print(""))
+        print(ANSI.print())

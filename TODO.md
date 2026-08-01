@@ -1,6 +1,6 @@
-== Created by OpenAI Sol ==
-
 Some of the suggestions are not relevant or necessary.
+
+== Created by OpenAI Sol ==
 
 Below is a static review based on the supplied files. I’ve separated definite defects from behavior that may be intentional.
 
@@ -509,3 +509,205 @@ Below is a static review based on the supplied files. I’ve separated definite 
 - [ ] **Filtering — Add table-driven tests for vertical, duration, cutoff, unknown metadata, permanent reject, and one-week resolution defer behavior.**
 
 The first work I would do is: fix the two syntax errors, repair coordinator scheduling, guarantee thread/terminal cleanup, correct yt-dlp return-code handling, and add exception-safe state restoration. Those issues can currently prevent startup, falsely mark successful downloads as failures, or hang the entire application.
+
+== Created by Anthropic Opus 5 ==
+
+# Code Review — Checklist
+
+## 🔴 Critical (won't run / crashes threads)
+
+- [ ] **`channel.py`** — Python 2 except syntax → `SyntaxError`, module won't import.
+  ```diff
+  -        except ValueError, TypeError:
+  +        except (ValueError, TypeError):
+  ```
+- [ ] **`view.py`** — same in `__update_filesize`. `FileNotFoundError` is a subclass of `OSError`, so `OSError` alone suffices.
+  ```diff
+  -                    except FileNotFoundError, OSError:
+  +                    except OSError:
+  ```
+- [ ] **`channel.py`** — `__download()` returns yt-dlp's *exit code* (`0` = success), which is falsy. So `if self.__extract(...)` treats every successful download as a failure and `__set_download_date()` never fires.
+  ```diff
+  -    def __download(self, processor):
+  -        if item := self.__item:
+  -            return processor.download(item.original_url)
+  +    def __download(self, processor):
+  +        if item := self.__item:
+  +            return processor.download([item.original_url]) == 0
+  +        return False
+  ```
+- [ ] **`view.py`** — `processes[item.processor]` raises `KeyError` for any postprocessor not in the dict (`FFmpegVideoConvertor`, `EmbedSubtitle`, `ExtractAudio`, `SponsorBlock`…), killing the view thread and freezing the UI.
+  ```diff
+  -                    self.__slots[body.index].set_status_message(
+  -                        processes[item.processor], item.status
+  -                    )
+  +                    self.__slots[body.index].set_status_message(
+  +                        processes.get(item.processor, item.processor), item.status
+  +                    )
+  ```
+- [ ] **`view.py`** — `__update_error`: `body.message` can be `None` (`ErrorMessage.message: None | str`) → `AttributeError` in the view thread. Guard before `.split(":")`.
+- [ ] **`view.py`** — the whole `__run` loop has no top-level `try/except`. One unhandled exception silently kills rendering while downloads continue. Wrap the message dispatch in `try/except Exception` and surface the error into a slot/status line.
+- [ ] **`slot.py`** — `Hook.common` raises `DownloadCancelled` on halt; it propagates out of `channel.download()` and kills the slot thread, so `ready()` is `False` forever and the coordinator spins. Wrap the work in `__run`:
+  ```python
+  try:
+      channel.download(self.__index, processor, self.__view_queue)
+  except DownloadCancelled:
+      pass
+  except Exception as e:  # report, don't die
+      self.__view_queue.put(Message(Msg.ERROR, ErrorMessage(
+          self.__index, "slot", None, str(e))))
+  finally:
+      self.__channel = None
+      self.__ready = True
+  ```
+- [ ] **`coordinator.py`** — early returns (`return 1`, `return 2`) skip `self.__view.halt()/join()`. The View thread is non-daemon → the process hangs after "No channels". Restructure with a `finally:` shutdown block, or `return` through a single exit path.
+
+## 🟠 Logic bugs
+
+- [ ] **`terminal.py`** — `if 1 > row > self.__height` is a chained comparison that is *always false*; bounds checking is dead code.
+  ```diff
+  -        if 1 > row > self.__height or 1 > col > self.__width:
+  +        if not (1 <= row <= self.__height and 1 <= col <= self.__width):
+               return
+  -        remaining_space = self.__width - col
+  +        remaining_space = self.__width - col + 1
+  ```
+- [ ] **`ansi.py`** — `ANSI.trim()` is broken: escape positions are recorded against the *original* string (including escape lengths) but re-inserted into the *stripped* string, so colors land at wrong offsets; the `while ANSI.len(...)` loop is also O(n²). Rewrite as a single left-to-right walk that accumulates visible width and passes escapes through:
+  ```python
+  @staticmethod
+  def trim(string, length):
+      regex = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+      out, width, pos = [], 0, 0
+      while pos < len(string):
+          if m := regex.match(string, pos):
+              out.append(m.group())
+              pos = m.end()
+              continue
+          w = Unicode.len(string[pos])
+          if width + w > length:
+              break
+          out.append(string[pos])
+          width += w
+          pos += 1
+      return "".join(out)
+  ```
+- [ ] **`channel.py`** — `Channel.load_channels` turns *blank lines* into channels (`""` name, `None` url). Skip empty lines: `if not line or line.startswith("#"): continue`.
+- [ ] **`channel.py`** — sub-channel loop shadows the `playlist_index` parameter and overwrites `__last_error` on every iteration, producing `"(None)"` when the sub-channel succeeded. Collect errors instead:
+  ```python
+  errors = [c.get_last_error() for c in self.__sub_channels if c.get_last_error()]
+  if errors:
+      self.__set_error(f"{len(errors)} sub-errors: {errors[-1]}")
+  ```
+- [ ] **`channel.py`** — halt busy-loop: when the event *is* set it iterates `sleep_time >> 3` times doing nothing instead of breaking. Also the condition is inverted-looking.
+  ```diff
+  -                        for _ in range(sleep_time >> 3):
+  -                            if (
+  -                                self.__halt_event is not None
+  -                                and not self.__halt_event.is_set()
+  -                            ):
+  -                                sleep(8)
+  +                        if self.__halt_event is not None:
+  +                            self.__halt_event.wait(sleep_time)
+  +                        else:
+  +                            sleep(sleep_time)
+  ```
+- [ ] **`channel.py`** — `entries = list(info.get("entries"))` → `TypeError` when a playlist has no `entries` key. Use `info.get("entries") or []`.
+- [ ] **`channel.py`** — for playlists `__extract` returns `True` unconditionally, so the parent's download date is bumped even if every sub-channel failed. Return `any(...)`/`all(...)` of the sub results (confirm intent — see questions).
+- [ ] **`channel.py`** — unbounded recursion depth for nested playlists (playlist → playlist → …). Add a `max_sub_level` guard from `Config`.
+- [ ] **`coordinator.py`** — when all channels are active, `__next_channel()` returns `None`, and `slot.channel() != channel` is `False` for every idle slot (idle slots hold `None`), so the loop spins at 1 Hz **rewriting the channels file every second**. Guard on `channel is None` before slot search, and throttle saves:
+  ```python
+  channel = self.__next_channel()
+  if channel is None:
+      self.__halt_event.wait(1)  # or sleep(1)
+      continue
+  ```
+- [ ] **`coordinator.py`** — `Channel` state is mutated from slot threads while the coordinator serialises it → torn writes. Add a lock around `write()`/mutators, or snapshot under a lock before saving.
+- [ ] **`slot.py`** — the `index` argument is ignored (`self.__index = Slot.index`) while the thread name uses `index`. If they ever diverge, view slots and log lines desync. Pick one:
+  ```diff
+  -        self.__index = Slot.index
+  +        self.__index = index
+  ```
+- [ ] **`slot.py`** — `__setup` mutates the *shared* `Config.ydl_settings` (including the nested `paths` dict, which `dict(settings)` copies by reference). Every `YoutubeDL` instance shares one `paths` object. Use `copy.deepcopy(Config.ydl_settings)` and mutate the copy.
+- [ ] **`item.py`** — `Item.get_item` passes `info.get("formats") or {}`; if `formats` were ever a non-empty dict, iteration yields `str` keys and `format.get` explodes. Use `or []`.
+- [ ] **`item.py`** — `get_status` ignores `total_bytes_estimate`, which is what yt-dlp supplies for most fragmented/HLS downloads → `total_bytes = 0` → `rem_bits` goes negative in `view.__update_item`.
+  ```diff
+  -            data.get("total_bytes") or 0,
+  +            data.get("total_bytes") or data.get("total_bytes_estimate") or 0,
+  ```
+  and clamp in the view: `rem_bits = max(0, total - downloaded) >> 7`.
+- [ ] **`item.py`** — `within_cutoff`: `cutoff == 0` is dead after the walrus (walrus already guarantees truthiness). Simplify.
+- [ ] **`view.py`** — `Logger` emits `SleepMessage` with `provider` = extractor name (e.g. `youtube`), but `__update_sleep` only handles `"download"`, `"channel"`, `"sub_channel"`, so yt-dlp's own sleep intervals never show. Either broaden the check or normalise providers in `Logger`.
+- [ ] **`view.py`** — `"sub_channel"` provider is handled but **nothing ever sends it**; `Channel` always sends `"channel"`, so sub-channel top-name reset is unreachable. Send the real provider from `Channel.__extract` based on `__sub_level`.
+- [ ] **`view.py`** — `set_item` computes `self.__item_count - index + 1`; with `__item_count == 0` (non-playlist) this yields negatives. Guard with `if self.__item_count else str(index)`.
+- [ ] **`view.py`** — `__assign_position` silently drops slots when `rows * columns` is exhausted (already flagged by your TODO). At minimum log/mark overflow slots so they aren't invisible.
+- [ ] **`view.py`** — the loop only redraws in the `Empty` branch; under a message flood the UI stalls. Prefer `self.__queue.get(timeout=0.25)` and redraw on a wall-clock tick.
+- [ ] **`terminal.py`** — no `flush()` after `print(...)`; output relies on line buffering. Also `print(ANSI.print())` re-homes the cursor after *every* cell write. Batch a frame into one `sys.stdout.write` + single flush.
+- [ ] **`util.py`** — `format_seconds(include_seconds=True, two_parts=True)` with `hr > 0` falls through the `if` block and returns rounded `HH:MM`, dropping seconds. Verify intent; if unintended, return `f"{hr:02}:{mn:02}:{sc:02}"`.
+
+## 🟡 Robustness / data integrity
+
+- [ ] **`channel.py`** — the channels file is hand-rolled CSV: any `;` in a title corrupts the row, and `write()` silently returns `""` (dropping the channel from the file = **data loss**). Switch to `csv.reader/writer` with proper quoting, or escape `;`.
+- [ ] **`channel.py`** — `None` fields are written as the literal string `"None"` and read back as the string `"None"` (hence the `url == "None"` check). Write empty fields and convert `"" -> None` on load.
+- [ ] **`channel.py`** — errors from yt-dlp reach the View but are never written back to `__last_error`; the channels file only ever records internal errors. Wire `Logger.error` → slot → channel.
+- [ ] **`config.py`** — `save()` catches `FileExistsError` (never raised by `open(..., "w")`) but not `PermissionError`/`IsADirectoryError`/`OSError`. Catch `OSError`.
+- [ ] **`config.py`** — no validation: `Paths.output` defaults to `None` and is passed straight to yt-dlp. Fail fast with a clear message if required settings are missing.
+- [ ] **`config.py`** — `interpret` round-trips lossily: a string value like `007` or `yes` saved unquoted comes back as `int`/`bool`. Quote strings on save.
+- [ ] **`config.py`** — `initialize()` sets `Paths.config = os.path.curdir` but `Config.ini` may be an absolute path elsewhere; derive `path` from `os.path.dirname(os.path.abspath(config_ini))`.
+- [ ] **`main.py`** — no argument parsing/validation. Use `argparse` (`--config`, `--slots`, `--debug`) and validate the config path exists before `Coordinator()` starts threads.
+- [ ] **`main.py`** — the error `print` may land inside/after the alternate screen depending on teardown order. Buffer errors and print them after `View.join()`.
+- [ ] **`logger.py`** — `__temp_writer` is a no-op and `Config.settings["Debug"]` is never used. Implement a real file logger gated on `Debug.active`, or delete the dead code.
+- [ ] **`ansi.py`** — `assert len(hex) == 6` disappears under `python -O`. Raise `ValueError`.
+- [ ] **`terminal.py` / `view.py`** — `input_queue` is created and threaded through three classes but never read. Either implement key handling (`q` to quit, arrows to page slots) — you already have cbreak mode — or remove it.
+- [ ] **Signals** — `KeyboardInterrupt` is only caught in the coordinator loop; a `Ctrl+C` during `slot.join()` leaves the terminal in the alternate screen. Install a `SIGINT`/`SIGTERM` handler that sets a shared halt event.
+
+## 🔵 Refactoring
+
+- [ ] **`item.py`** — the 60-field dataclass built by concatenating three positional tuples is the most fragile part of the codebase: reordering one field in `get_details` silently mis-assigns ~30 attributes. Split into `Details`/`Format`/`Progress` dataclasses (composed into `Item`) and construct with **keyword** arguments:
+  ```python
+  @dataclass
+  class Item:
+      details: Details
+      format: Format
+      progress: Progress
+
+      @classmethod
+      def from_info(cls, info: dict) -> "Item":
+          return cls(Details.from_info(info), Format.best(info.get("formats") or []),
+                     Progress.empty())
+  ```
+  If you want to keep the flat shape, at least build via a dict + `Item(**fields)`.
+- [ ] **`view.py`** — `View.Slot` is ~350 lines mixing state, layout and rendering. Extract a `SlotRenderer` (pure: state → list of `(row, col, text)`) so rendering becomes unit-testable without a TTY.
+- [ ] **`view.py`** — replace the `isinstance` ladder in `__run` with a dispatch dict `{(Msg.INIT, InitMessage): handler, ...}` or `functools.singledispatchmethod`.
+- [ ] **`channel.py`** — `Channel` currently does persistence, traversal, filtering, downloading, sleeping *and* view messaging. Split into `ChannelRecord` (data + serialisation) and `ChannelJob` (extract/download/report).
+- [ ] **`channel.py`** — `set_epoch_cutoff` both mutates and returns; rename to `epoch_cutoff()` as a cached property.
+- [ ] **Typing** — add type hints and run `mypy`/`pyright`; `Config.settings` as a nested `dict[str, dict[str, Any]]` defeats all checking. Consider a typed `dataclass` config with `tomllib` instead of a hand-rolled INI parser (stdlib `configparser` also handles this).
+- [ ] **Dead code** — `View.Slot.__progress_meter_long`, `get_id`, `get_top`, `__top_name_last_dl` (stored, never rendered), `View.ready()`, `InitMessage` extra fields, `Config.print()`. Remove or use.
+- [ ] **Tests** — no test suite. Highest value/lowest effort: `Config.interpret`, `ANSI.trim`/`ANSI.len`, `Unicode.len`, `Util.format_seconds`, `Channel.load_channels`/`save_channels` round-trip, `Item.enumerate_best_format`.
+- [ ] **Packaging** — add `pyproject.toml` with pinned `yt-dlp`, entry point `vidl = vidl.main:main`, plus `ruff` + `mypy` in CI.
+
+## 🟢 Planned features
+
+- [ ] **Archive rejects** — record filtered-out items so they aren't re-extracted every pass. yt-dlp exposes `YoutubeDL.record_download_archive(info_dict)`; call it from `Channel.__extract` in the `else` branch where you currently only `__set_error("No formats or outside cutoff")`. Recommend a *separate* reject file (`Config["Channels"]["rejected"]`) so a policy change (e.g. lowering `minimum_resolution`) can be undone by deleting one file — the main archive stays authoritative for successful downloads.
+- [ ] **Week hold for low-resolution uploads** — don't reject young videos that haven't finished processing; defer them. Suggested predicate in `Item`:
+  ```python
+  def on_hold(self, now: int) -> bool:
+      """Young upload below target resolution: likely still transcoding."""
+      hold_days = Config.settings["Download"]["resolution_hold_days"]  # e.g. 7
+      target = Config.settings["Download"]["target_resolution"]        # e.g. 2160
+      if not hold_days or not target or self.height >= target:
+          return False
+      if not self.timestamp:
+          return False
+      return (now - self.timestamp) < hold_days * 86_400
+  ```
+  Then in `Channel.__extract`: hold → **skip without recording** to the reject archive and without setting the download date, so the next pass retries. Add a `View.Status.HELD` (or reuse `WARNING`) with a "held until YYYY-MM-DD" status line so it's visible why nothing downloaded.
+  - New config keys: `target_resolution`, `resolution_hold_days`.
+  - Note this interacts with `playlist_cutoff`: a video can be *held* and then fall *outside* the cutoff. Decide precedence (suggest: cutoff wins, and log it).
+
+## ❓ Questions before I'd change these
+
+- [ ] **`channel.py`** — `sleep_time = min(3600, int(time()) - process_time)` sleeps for *as long as the download took*. Deliberate rate-limiting/politeness heuristic, or was a fixed `Config["Download"]["sleep_interval"]` intended?
+- [ ] **`view.py`** — `set_item` displaying `count - index + 1` (reverse playlist numbering) — deliberate "newest = #1"?
+- [ ] **`coordinator.py`** — `run()` never exits on its own (infinite scheduling loop). Intended as a long-running daemon, or should it terminate after one full pass over all channels?
+- [ ] **`channel.py`** — should a playlist parent's `last_download_date` update when *any* child succeeded, when *all* did, or unconditionally (current behaviour)?
+- [ ] **`slot.py`** — is `Slot.processor_lock` guarding `YoutubeDL()` construction because of the `cookiesfrombrowser` Safari cookie DB, or something else? That determines whether it can be narrowed.

@@ -2,7 +2,7 @@ import os
 from enum import Enum
 from queue import Empty, Queue
 from threading import Event, Thread
-from time import sleep, time
+from time import time
 
 from .ansi import ANSI
 from .message import (
@@ -28,6 +28,7 @@ class View:
     COL_SIZE = 120
     HEAD_SIZE = 5
     FULL_INTERVAL_COUNT = 4
+    LOOP_WAIT = 1 / FULL_INTERVAL_COUNT
 
     class Status(Enum):
         INACTIVE = 0
@@ -150,7 +151,11 @@ class View:
         def set_item(self, id, index, item_date, title):
             self.__item_id = id
             if index:
-                self.__item_index = str(self.__item_count - index + 1)
+                self.__item_index = (
+                    str(self.__item_count - index + 1)
+                    if self.__item_count
+                    else str(index)
+                )
             self.__item_date = Util.get_date(item_date)
             self.__item_title = title
 
@@ -208,10 +213,11 @@ class View:
                         self.__update_filesize()
                     self.__last_id = self.__item_id
                 self.__status_line(terminal, row, col, hgt, wdt)
+                terminal.flush()
 
         def __border(self, terminal, r, c, h, w):
             title = ""
-            if len(self.__top_name) < w - 12:
+            if ANSI.len(self.__top_name) < w - 12:
                 title = " │ " + f"{self.__top_name} {self.__top_name_count}"
             header = (
                 ""
@@ -389,12 +395,16 @@ class View:
                     return ANSI.Color.Cerise + "○" + ANSI.Color.DefaultFg
 
         def __progress_meter(self, length, percent, kind="-"):
-            progress = int((length * percent) / 100)
+            if length < 1:
+                return ""
+            progress = int((length * min(100, max(0, percent))) / 100)
             remaining = length - progress
             meter = kind * progress + ANSI.Dim + kind * remaining + ANSI.DimReset
             return meter
 
         def __progress_meter_long(self, length, percent):
+            if length < 1:
+                return ""
             pad = ""
             if length & 1:
                 pad = " "
@@ -409,21 +419,21 @@ class View:
                 for filename in [self.__temp_filepath, self.__temp_filepath + ".part"]:
                     try:
                         self.__progress_file_size = os.path.getsize(filename)
-                    except FileNotFoundError, OSError:
+                    except OSError:
                         ...
 
     def __init__(self) -> None:
         self.__ready = False
+        self.__slots = {}
+        self.__columns = 0
+        self.__rows = 0
+        self.__slot_size = None
         self.__queue = Queue()
         self.__input_queue = Queue()
         self.__halt_event = Event()
         self.__thread = Thread(target=self.__run, name=f"View-{View.index}")
         self.__thread.start()
         View.index += 1
-        self.__slots = {}
-        self.__columns = 0
-        self.__rows = 0
-        self.__slot_size = None
 
     def get_queues(self):
         return self.__queue, self.__input_queue
@@ -439,7 +449,7 @@ class View:
             full_count = View.FULL_INTERVAL_COUNT
             while not self.__halt_event.is_set():
                 try:
-                    message = self.__queue.get(block=False)
+                    message = self.__queue.get(timeout=View.LOOP_WAIT)
                     if message.kind != Msg.HALT:
                         try:
                             if (
@@ -479,15 +489,15 @@ class View:
                                 if isinstance(message.body, ErrorMessage):
                                     self.__update_error(message.body)
                 except Empty:
-                    if full_count == 0:
-                        for slot in self.__slots.values():
-                            slot.update(terminal, True)
-                        full_count = View.FULL_INTERVAL_COUNT
-                    else:
-                        for slot in self.__slots.values():
-                            slot.update(terminal, False)
-                        full_count -= 1
-                    sleep(0.25)
+                    ...
+                if full_count == 0:
+                    for slot in self.__slots.values():
+                        slot.update(terminal, True)
+                    full_count = View.FULL_INTERVAL_COUNT
+                else:
+                    for slot in self.__slots.values():
+                        slot.update(terminal, False)
+                    full_count -= 1
 
     def halt(self):
         self.__ready = False
@@ -590,7 +600,7 @@ class View:
                 }
                 if item.processor != "progress":
                     self.__slots[body.index].set_status_message(
-                        processes[item.processor], item.status
+                        processes.get(item.processor, item.processor), item.status
                     )
 
     def __update_item_media(self, slot, item):
@@ -648,13 +658,14 @@ class View:
 
     def __update_error(self, body):
         if body.index in self.__slots:
-            message = body.message.split(":", maxsplit=1)
-            if len(message) > 1:
-                provider = message[0]
-                message = message[1]
-                self.__slots[body.index].set_status_message(provider, message)
-            else:
-                self.__slots[body.index].set_status_message(
-                    f"{body.provider}/{body.target}", body.message
-                )
+            if body.message:
+                message = body.message.split(":", maxsplit=1)
+                if len(message) > 1:
+                    provider = message[0]
+                    message = message[1]
+                    self.__slots[body.index].set_status_message(provider, message)
+                else:
+                    self.__slots[body.index].set_status_message(
+                        f"{body.provider}/{body.target}", body.message
+                    )
             self.__slots[body.index].set_status(View.Status.ERROR)

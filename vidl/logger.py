@@ -187,5 +187,5 @@ class Logger:
     def __temp_writer(self, message):
         pass
         # print(message)
-        # with open(f"temp_debug_{self.__slot_index}.log", "a") as f:
+        # with open(f"temp_debug_{self.__slot_index}.log", "a", encoding="utf-8") as f:
         #    f.write(f"{message}\n")

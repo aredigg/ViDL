@@ -18,12 +18,16 @@ class Config:
             "output": None,
             "temporary": None,
         },
+        "General": {
+            "cookie_browser": "safari",
+        },
         "Download": {
             "allow_vertical": False,
             "minimum_resolution": 0,
             "minimum_duration": 0,
             "playlist_cutoff": 0,
             "sleep_interval": 60,
+            "post_sleep_cutoff": 60,
         },
         "Debug": {
             "file_name": "debug",
@@ -41,9 +45,8 @@ class Config:
         "max_sleep_interval": 10,
         "sleep_interval_requests": 1,
         "paths": {},
-        "cookiesfrombrowser": ("safari", None, None, None),
         "outtmpl": "%(channel)s/%(timestamp>%Y-%m)s/%(id)s.%(ext)s",
-        "format": "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4] / bestvideo*+bestaudio/best",
+        "format": "bestvideo*[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo*+bestaudio/best",
         "writesubtitles": True,
         "writeautomaticsub": False,
         "subtitleslangs": ["all"],
@@ -66,7 +69,7 @@ class Config:
     @staticmethod
     def load():
         try:
-            with open(Config.ini) as f:
+            with open(Config.ini, encoding="utf-8") as f:
                 category = None
                 for line in f:
                     line = line.strip()
@@ -89,14 +92,17 @@ class Config:
     @staticmethod
     def save():
         try:
-            with open(Config.ini, "w") as f:
+            with open(Config.ini, "w", encoding="utf-8") as f:
                 for category, options in Config.settings.items():
                     f.write(f"[{category}]\n")
                     for key, value in options.items():
-                        f.write(f"{key} = {value}\n")
+                        if isinstance(value, str):
+                            f.write(f'{key} = "{value}"\n')
+                        else:
+                            f.write(f"{key} = {value}\n")
                     f.write("\n")
-        except FileExistsError:
-            print(f"File {Config.ini} exists")
+        except OSError as e:
+            print(f"File {Config.ini} error, {e}")
 
     @staticmethod
     def interpret(value):

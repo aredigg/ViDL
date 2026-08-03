@@ -38,41 +38,33 @@ class Coordinator:
         return self.__error
 
     def run(self):
-        if not self.__running:
-            return 1
-        if not self.__channels:
-            self.__error = "No channels"
-            return 2
-        else:
-            self.__save_channels()
-        while self.__running:
-            try:
-                channel = self.__next_channel()
-                available_slot = None
-                while available_slot is None:
-                    if not (
-                        available_slot := next(
-                            (
-                                slot
-                                for slot in self.__slots
-                                if slot.ready() and slot.channel() != channel
-                            ),
-                            None,
-                        )
-                    ):
-                        self.__save_channels()
+        try:
+            if not self.__running:
+                return 1
+            if not self.__channels:
+                self.__error = "No channels"
+                return 2
+            else:
+                self.__save_channels()
+            while self.__running:
+                try:
+                    channel = self.__next_channel()
+                    slot = next((slot for slot in self.__slots if slot.ready()), None)
+                    if channel is not None and slot is not None:
+                        channel.set_active()
+                        slot.process(channel)
+                    else:
                         sleep(1)
-                if channel is not None:
-                    channel.set_active()
-                    available_slot.process(channel)
-            except KeyboardInterrupt:
-                self.__running = False
-        for slot in self.__slots:
-            slot.halt()
-        for slot in self.__slots:
-            slot.join()
-        self.__view.halt()
-        self.__view.join()
+                except KeyboardInterrupt:
+                    self.__running = False
+        finally:
+            for slot in self.__slots:
+                slot.halt()
+            for slot in self.__slots:
+                slot.join()
+            self.__view.halt()
+            self.__view.join()
+            self.__save_channels()
 
         return 3 if self.__error is not None else 0
 

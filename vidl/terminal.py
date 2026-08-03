@@ -33,10 +33,12 @@ class Terminal:
         return self.__height, self.__width
 
     def print(self, string, row, col):
-        if 1 > row > self.__height or 1 > col > self.__width:
+        if not (1 <= row <= self.__height and 1 <= col <= self.__width):
             return
-        remaining_space = self.__width - col
+        remaining_space = self.__width - col + 1
         if ANSI.len(string) > remaining_space:
             string = ANSI.trim(string, remaining_space)
         print(ANSI.print(string, row, col), end="")
+
+    def flush(self):
         print(ANSI.print())

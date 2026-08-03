@@ -70,7 +70,7 @@ class Item:
 
     def within_cutoff(self, channel):
         if cutoff := Config.settings["Download"]["playlist_cutoff"]:
-            return cutoff == 0 or self.timestamp >= channel.set_epoch_cutoff(
+            return not self.timestamp or self.timestamp >= channel.set_epoch_cutoff(
                 cutoff * 86_400
             )
         return True
@@ -83,7 +83,7 @@ class Item:
             data.get("filename") or "",
             data.get("elapsed") or 0.0,
             data.get("downloaded_bytes") or 0,
-            data.get("total_bytes") or 0,
+            data.get("total_bytes") or data.get("total_bytes_estimate") or 0,
             data.get("fragment_index") or 0,
             data.get("fragment_count") or 0,
             data.get("speed") or 0.0,
@@ -166,7 +166,7 @@ class Item:
         return Item(
             *(
                 Item.get_details(info or {})
-                + Item.enumerate_best_format(info.get("formats") or {})
+                + Item.enumerate_best_format(info.get("formats") or [])
                 + Item.get_status({})
             )
         )

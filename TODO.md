@@ -6,7 +6,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
 
 ## Critical defects
 
-- [ ] **`channel.py` — Fix invalid exception syntax.**  
+- [x] **`channel.py` — Fix invalid exception syntax.**  
   This prevents the module from loading under Python 3:
   ```python
   except (ValueError, TypeError):
@@ -14,13 +14,13 @@ Below is a static review based on the supplied files. I’ve separated definite 
       self.__last_attempt_date = 0
   ```
 
-- [ ] **`view.py` — Fix invalid exception syntax in `__update_filesize()`.**
+- [x] **`view.py` — Fix invalid exception syntax in `__update_filesize()`.**
   ```python
   except (FileNotFoundError, OSError):
       pass
   ```
 
-- [ ] **`coordinator.py` — Fix the scheduler deadlock when all channels are active.**  
+- [x] **`coordinator.py` — Fix the scheduler deadlock when all channels are active.**  
   `__next_channel()` can return `None`. The inner loop then rejects an idle slot whose
   `channel()` is also `None`, and never recalculates the channel. Select both the
   channel and slot on each iteration:
@@ -37,7 +37,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
           sleep(1)
   ```
 
-- [ ] **`channel.py` — Treat `YoutubeDL.download()` return values correctly.**  
+- [x] **`channel.py` — Treat `YoutubeDL.download()` return values correctly.**  
   yt-dlp returns `0` for success, which is false in Python. Consequently,
   successful downloads may never update `last_download_date`.
 
@@ -51,7 +51,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
       return bool(url) and processor.download([url]) == 0
   ```
 
-- [ ] **`channel.py` — Always clear `active` and `slot_index` with `finally`.**  
+- [x] **`channel.py` — Always clear `active` and `slot_index` with `finally`.**  
   Any extraction, hook, logger, or yt-dlp exception currently leaves the channel
   permanently active:
   ```python
@@ -81,7 +81,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   non-daemon view thread can keep the process alive and leave the terminal in cbreak
   and alternate-screen mode. Put shutdown in a `finally` block.
 
-- [ ] **`view.py` — Initialize instance state before starting its thread.**  
+- [x] **`view.py` — Initialize instance state before starting its thread.**  
   `self.__thread.start()` currently happens before `self.__slots`, dimensions, and
   slot size are initialized. The thread can access them immediately and raise
   `AttributeError`.
@@ -95,7 +95,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   self.__thread.start()
   ```
 
-- [ ] **`terminal.py` — Correct the bounds check.**  
+- [x] **`terminal.py` — Correct the bounds check.**  
   The chained comparisons can never work as intended:
   ```python
   if row < 1 or row > self.__height or col < 1 or col > self.__width:
@@ -104,11 +104,11 @@ Below is a static review based on the supplied files. I’ve separated definite 
 
 ## Channel and playlist processing
 
-- [ ] **`channel.py` — Clear or replace `__sub_channels` on every playlist extraction.**  
+- [x] **`channel.py` — Clear or replace `__sub_channels` on every playlist extraction.**  
   It is currently appended to each time the parent channel runs. Recurring playlist
   checks will repeatedly process old entries and continuously increase memory use.
 
-- [ ] **`channel.py` — Handle missing or malformed playlist entries.**
+- [x] **`channel.py` — Handle missing or malformed playlist entries.**
   ```python
   entries = list(info.get("entries") or [])
   for entry in entries:
@@ -125,7 +125,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   succeeded, or distinguish “playlist successfully inspected” from “media
   downloaded.”
 
-- [ ] **`channel.py` — Do not overwrite the parent error with `"(None)"`.**  
+- [x] **`channel.py` — Do not overwrite the parent error with `"(None)"`.**  
   Only copy a child error when one exists. Prefer collecting multiple errors instead
   of replacing the previous one.
 
@@ -133,7 +133,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   Define separate outcomes such as `DOWNLOADED`, `DEFERRED`, `REJECTED`,
   `NO_NEW_ITEMS`, and `ERROR`. A Boolean is becoming too ambiguous for this flow.
 
-- [ ] **`channel.py` — Revisit the post-download sleep calculation.**  
+- [x] **`channel.py` — Revisit the post-download sleep calculation.**  
   `sleep_time` is the elapsed download time, capped at one hour:
   ```python
   sleep_time = min(3600, int(time()) - process_time)
@@ -141,7 +141,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   If this proportional cooldown is deliberate, document it. Otherwise use the
   configured sleep interval.
 
-- [ ] **`channel.py` — Replace the sleep loop with interruptible event waiting.**  
+- [x] **`channel.py` — Replace the sleep loop with interruptible event waiting.**  
   The current loop discards the remainder below eight seconds and performs no sleep
   if the halt event is absent:
   ```python
@@ -151,7 +151,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
       sleep(sleep_time)
   ```
 
-- [ ] **`channel.py` — Report the sleep before actually sleeping only if that is the UI contract.**  
+- [x] **`channel.py` — Report the sleep before actually sleeping only if that is the UI contract.**  
   At present the view receives a timer and the slot then blocks. That is reasonable,
   but it should be explicitly documented because the provider names control how the
   view interprets the message.
@@ -166,12 +166,12 @@ Below is a static review based on the supplied files. I’ve separated definite 
 
 ## Configuration and persistence
 
-- [ ] **`config.py` / `main.py` — Avoid rewriting configuration on every startup.**  
+- [x] **`config.py` / `main.py` — Avoid rewriting configuration on every startup.**  
   `Config.load()` followed immediately by `Config.save()` removes comments,
   formatting, and ordering from the user’s file. Only save when creating a default
   file or when settings actually change.
 
-- [ ] **`config.py` — Catch useful write errors.**  
+- [x] **`config.py` — Catch useful write errors.**  
   Opening a file with `"w"` normally does not raise `FileExistsError`. Catch
   `OSError` and propagate or return it instead of only printing.
 
@@ -188,12 +188,12 @@ Below is a static review based on the supplied files. I’ve separated definite 
   - output/config paths have the expected type
   - channel and archive filenames are nonempty
 
-- [ ] **`config.py` — Preserve string types during round trips.**  
+- [x] **`config.py` — Preserve string types during round trips.**  
   A string such as `"true"` is written without quotes and reloads as Boolean
   `True`. Add explicit serialization for strings, or use `configparser`, TOML, or
   another established format.
 
-- [ ] **`config.py` / `slot.py` — Do not mutate global nested yt-dlp settings per slot.**  
+- [x] **`config.py` / `slot.py` — Do not mutate global nested yt-dlp settings per slot.**  
   `Config.ydl_settings["paths"]`, logger, and hook arrays are shared. Build a deep
   copy for every processor:
   ```python
@@ -202,11 +202,11 @@ Below is a static review based on the supplied files. I’ve separated definite 
   settings = deepcopy(Config.ydl_settings)
   ```
 
-- [ ] **`config.py` — Make the hard-coded Safari cookie source configurable.**  
+- [x] **`config.py` — Make the hard-coded Safari cookie source configurable.**  
   This fails on systems without Safari and can make otherwise valid downloads fail.
   Allow no cookie source, a cookie file, or a configured browser.
 
-- [ ] **`config.py` — Verify and simplify the format-selector whitespace.**  
+- [x] **`config.py` — Verify and simplify the format-selector whitespace.**  
   The selector contains spaces around one fallback slash. Remove accidental
   whitespace and add tests that ensure the intended fallback order is selected.
 
@@ -224,7 +224,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   Use Python’s `csv` module with `delimiter=";"`, including quoting and explicit
   encoding.
 
-- [ ] **All file I/O — Specify an encoding.**  
+- [x] **All file I/O — Specify an encoding.**  
   Channel names, errors, and configuration can contain Unicode:
   ```python
   with open(file_name, encoding="utf-8") as file:
@@ -233,7 +233,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
 
 ## Slot and coordinator lifecycle
 
-- [ ] **`slot.py` — Use the supplied slot index.**  
+- [x] **`slot.py` — Use the supplied slot index.**  
   The constructor ignores its `index` argument and uses the static `Slot.index`.
   This breaks when multiple coordinators are created in the same process. Assign
   `self.__index = index` and remove the static counter.
@@ -253,7 +253,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   `DownloadCancelled` may escape yt-dlp and kill the worker. Catch it explicitly,
   treat it as a normal halt, and avoid presenting it as a download failure.
 
-- [ ] **`coordinator.py` — Save once more after all workers have joined.**  
+- [x] **`coordinator.py` — Save once more after all workers have joined.**  
   Otherwise the last completed download or error can be lost during shutdown.
 
 - [ ] **`coordinator.py` — Avoid saving the complete channel file every second while busy.**  
@@ -299,7 +299,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   The key ignores bitrate, codec preference, and whether the format contains video
   or audio. It can choose a nonrepresentative format among equal-resolution options.
 
-- [ ] **`item.py` — Use a list rather than `{}` as the empty formats collection.**
+- [x] **`item.py` — Use a list rather than `{}` as the empty formats collection.**
   ```python
   info.get("formats") or []
   ```
@@ -307,7 +307,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
 - [ ] **`item.py` — Harden `get_item()` against `None` and malformed extractor data.**  
   It uses `info.get(...)` after partially accounting for `info is None`.
 
-- [ ] **`item.py` — Simplify the cutoff condition.**  
+- [x] **`item.py` — Simplify the cutoff condition.**  
   Inside the walrus block, `cutoff == 0` is unreachable:
   ```python
   cutoff = Config.settings["Download"]["playlist_cutoff"]
@@ -316,7 +316,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   return self.timestamp >= channel.set_epoch_cutoff(cutoff * 86_400)
   ```
 
-- [ ] **`item.py` — Decide how missing timestamps interact with cutoff rules.**  
+- [x] **`item.py` — Decide how missing timestamps interact with cutoff rules.**  
   A missing timestamp currently becomes zero and is rejected whenever a cutoff is
   active. This may incorrectly reject live items or extractors without timestamps.
 
@@ -331,7 +331,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   label = processes.get(item.processor, item.processor or "Unknown")
   ```
 
-- [ ] **`view.py` — Handle absent error messages.**  
+- [x] **`view.py` — Handle absent error messages.**  
   `ErrorMessage.message` is annotated as optional, but `__update_error()` calls
   `.split()` unconditionally.
 
@@ -343,20 +343,21 @@ Below is a static review based on the supplied files. I’ve separated definite 
   Many methods skip printing when content is too long, leaving stale text on screen.
   Let `Terminal.print()` trim it, or clear the full interior line before drawing.
 
-- [ ] **`view.py` — Use `ANSI.len()` for decorated or wide-character titles.**  
+- [x] **`view.py` — Use `ANSI.len()` for decorated or wide-character titles.**  
   `__border()` uses built-in `len()` when deciding whether the channel title fits.
 
-- [ ] **`view.py` — Prevent negative progress-meter widths.**  
+- [x] **`view.py` — Prevent negative progress-meter widths.**  
   Small terminals or long ETA text can produce a negative requested meter length.
   Clamp it with `max(0, length)`.
 
-- [ ] **`view.py` — Clamp progress values.**  
+- [x] **`view.py` — Clamp progress values.**  
   Percentages and remaining bytes can be negative or exceed 100 when totals are
   absent or estimates change.
 
 - [ ] **`view.py` — Prefer yt-dlp’s ETA and estimated total when available.**  
   The manually calculated remaining time only works when total bytes and bitrate are
   both reliable. Fragmented and live downloads often do not meet that condition.
+    --- NOOOOOOOOOO! --- yt-dlp eta and estimates sucks!!!!!!!!!!!!!!!!!!!
 
 - [ ] **`view.py` — Implement terminal-resize reflow or explicitly document fixed startup sizing.**  
   The size is read only at startup. Slots can become clipped or misplaced after a
@@ -366,14 +367,14 @@ Below is a static review based on the supplied files. I’ve separated definite 
   More worker slots than visible grid cells receive no position and are silently
   invisible. Either cap worker count, add paging, or reflow.
 
-- [ ] **`view.py` — Review the reverse playlist index calculation.**  
+- [x] **`view.py` — Review the reverse playlist index calculation.**  
   `item_count - index + 1` may be deliberate if entries are newest-first. Document
   that assumption or display the source playlist index directly.
 
 - [ ] **`view.py` — Remove or display `__top_name_last_dl`.**  
   It is assigned but never rendered.
 
-- [ ] **`terminal.py` — Correct available-width calculation.**  
+- [x] **`terminal.py` — Correct available-width calculation.**  
   Depending on whether columns are inclusive, this likely needs:
   ```python
   remaining_space = self.__width - col + 1
@@ -516,17 +517,17 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
 
 ## 🔴 Critical (won't run / crashes threads)
 
-- [ ] **`channel.py`** — Python 2 except syntax → `SyntaxError`, module won't import.
+- [x] **`channel.py`** — Python 2 except syntax → `SyntaxError`, module won't import.
   ```diff
   -        except ValueError, TypeError:
   +        except (ValueError, TypeError):
   ```
-- [ ] **`view.py`** — same in `__update_filesize`. `FileNotFoundError` is a subclass of `OSError`, so `OSError` alone suffices.
+- [x] **`view.py`** — same in `__update_filesize`. `FileNotFoundError` is a subclass of `OSError`, so `OSError` alone suffices.
   ```diff
   -                    except FileNotFoundError, OSError:
   +                    except OSError:
   ```
-- [ ] **`channel.py`** — `__download()` returns yt-dlp's *exit code* (`0` = success), which is falsy. So `if self.__extract(...)` treats every successful download as a failure and `__set_download_date()` never fires.
+- [x] **`channel.py`** — `__download()` returns yt-dlp's *exit code* (`0` = success), which is falsy. So `if self.__extract(...)` treats every successful download as a failure and `__set_download_date()` never fires.
   ```diff
   -    def __download(self, processor):
   -        if item := self.__item:
@@ -536,7 +537,7 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
   +            return processor.download([item.original_url]) == 0
   +        return False
   ```
-- [ ] **`view.py`** — `processes[item.processor]` raises `KeyError` for any postprocessor not in the dict (`FFmpegVideoConvertor`, `EmbedSubtitle`, `ExtractAudio`, `SponsorBlock`…), killing the view thread and freezing the UI.
+- [x] **`view.py`** — `processes[item.processor]` raises `KeyError` for any postprocessor not in the dict (`FFmpegVideoConvertor`, `EmbedSubtitle`, `ExtractAudio`, `SponsorBlock`…), killing the view thread and freezing the UI.
   ```diff
   -                    self.__slots[body.index].set_status_message(
   -                        processes[item.processor], item.status
@@ -545,9 +546,9 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
   +                        processes.get(item.processor, item.processor), item.status
   +                    )
   ```
-- [ ] **`view.py`** — `__update_error`: `body.message` can be `None` (`ErrorMessage.message: None | str`) → `AttributeError` in the view thread. Guard before `.split(":")`.
+- [x] **`view.py`** — `__update_error`: `body.message` can be `None` (`ErrorMessage.message: None | str`) → `AttributeError` in the view thread. Guard before `.split(":")`.
 - [ ] **`view.py`** — the whole `__run` loop has no top-level `try/except`. One unhandled exception silently kills rendering while downloads continue. Wrap the message dispatch in `try/except Exception` and surface the error into a slot/status line.
-- [ ] **`slot.py`** — `Hook.common` raises `DownloadCancelled` on halt; it propagates out of `channel.download()` and kills the slot thread, so `ready()` is `False` forever and the coordinator spins. Wrap the work in `__run`:
+- [x] **`slot.py`** — `Hook.common` raises `DownloadCancelled` on halt; it propagates out of `channel.download()` and kills the slot thread, so `ready()` is `False` forever and the coordinator spins. Wrap the work in `__run`:
   ```python
   try:
       channel.download(self.__index, processor, self.__view_queue)
@@ -560,11 +561,11 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
       self.__channel = None
       self.__ready = True
   ```
-- [ ] **`coordinator.py`** — early returns (`return 1`, `return 2`) skip `self.__view.halt()/join()`. The View thread is non-daemon → the process hangs after "No channels". Restructure with a `finally:` shutdown block, or `return` through a single exit path.
+- [x] **`coordinator.py`** — early returns (`return 1`, `return 2`) skip `self.__view.halt()/join()`. The View thread is non-daemon → the process hangs after "No channels". Restructure with a `finally:` shutdown block, or `return` through a single exit path.
 
 ## 🟠 Logic bugs
 
-- [ ] **`terminal.py`** — `if 1 > row > self.__height` is a chained comparison that is *always false*; bounds checking is dead code.
+- [x] **`terminal.py`** — `if 1 > row > self.__height` is a chained comparison that is *always false*; bounds checking is dead code.
   ```diff
   -        if 1 > row > self.__height or 1 > col > self.__width:
   +        if not (1 <= row <= self.__height and 1 <= col <= self.__width):
@@ -591,14 +592,14 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
           pos += 1
       return "".join(out)
   ```
-- [ ] **`channel.py`** — `Channel.load_channels` turns *blank lines* into channels (`""` name, `None` url). Skip empty lines: `if not line or line.startswith("#"): continue`.
+- [x] **`channel.py`** — `Channel.load_channels` turns *blank lines* into channels (`""` name, `None` url). Skip empty lines: `if not line or line.startswith("#"): continue`.
 - [ ] **`channel.py`** — sub-channel loop shadows the `playlist_index` parameter and overwrites `__last_error` on every iteration, producing `"(None)"` when the sub-channel succeeded. Collect errors instead:
   ```python
   errors = [c.get_last_error() for c in self.__sub_channels if c.get_last_error()]
   if errors:
       self.__set_error(f"{len(errors)} sub-errors: {errors[-1]}")
   ```
-- [ ] **`channel.py`** — halt busy-loop: when the event *is* set it iterates `sleep_time >> 3` times doing nothing instead of breaking. Also the condition is inverted-looking.
+- [x] **`channel.py`** — halt busy-loop: when the event *is* set it iterates `sleep_time >> 3` times doing nothing instead of breaking. Also the condition is inverted-looking.
   ```diff
   -                        for _ in range(sleep_time >> 3):
   -                            if (
@@ -611,10 +612,10 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
   +                        else:
   +                            sleep(sleep_time)
   ```
-- [ ] **`channel.py`** — `entries = list(info.get("entries"))` → `TypeError` when a playlist has no `entries` key. Use `info.get("entries") or []`.
+- [x] **`channel.py`** — `entries = list(info.get("entries"))` → `TypeError` when a playlist has no `entries` key. Use `info.get("entries") or []`.
 - [ ] **`channel.py`** — for playlists `__extract` returns `True` unconditionally, so the parent's download date is bumped even if every sub-channel failed. Return `any(...)`/`all(...)` of the sub results (confirm intent — see questions).
 - [ ] **`channel.py`** — unbounded recursion depth for nested playlists (playlist → playlist → …). Add a `max_sub_level` guard from `Config`.
-- [ ] **`coordinator.py`** — when all channels are active, `__next_channel()` returns `None`, and `slot.channel() != channel` is `False` for every idle slot (idle slots hold `None`), so the loop spins at 1 Hz **rewriting the channels file every second**. Guard on `channel is None` before slot search, and throttle saves:
+- [x] **`coordinator.py`** — when all channels are active, `__next_channel()` returns `None`, and `slot.channel() != channel` is `False` for every idle slot (idle slots hold `None`), so the loop spins at 1 Hz **rewriting the channels file every second**. Guard on `channel is None` before slot search, and throttle saves:
   ```python
   channel = self.__next_channel()
   if channel is None:
@@ -622,26 +623,26 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
       continue
   ```
 - [ ] **`coordinator.py`** — `Channel` state is mutated from slot threads while the coordinator serialises it → torn writes. Add a lock around `write()`/mutators, or snapshot under a lock before saving.
-- [ ] **`slot.py`** — the `index` argument is ignored (`self.__index = Slot.index`) while the thread name uses `index`. If they ever diverge, view slots and log lines desync. Pick one:
+- [x] **`slot.py`** — the `index` argument is ignored (`self.__index = Slot.index`) while the thread name uses `index`. If they ever diverge, view slots and log lines desync. Pick one:
   ```diff
   -        self.__index = Slot.index
   +        self.__index = index
   ```
-- [ ] **`slot.py`** — `__setup` mutates the *shared* `Config.ydl_settings` (including the nested `paths` dict, which `dict(settings)` copies by reference). Every `YoutubeDL` instance shares one `paths` object. Use `copy.deepcopy(Config.ydl_settings)` and mutate the copy.
-- [ ] **`item.py`** — `Item.get_item` passes `info.get("formats") or {}`; if `formats` were ever a non-empty dict, iteration yields `str` keys and `format.get` explodes. Use `or []`.
-- [ ] **`item.py`** — `get_status` ignores `total_bytes_estimate`, which is what yt-dlp supplies for most fragmented/HLS downloads → `total_bytes = 0` → `rem_bits` goes negative in `view.__update_item`.
+- [x] **`slot.py`** — `__setup` mutates the *shared* `Config.ydl_settings` (including the nested `paths` dict, which `dict(settings)` copies by reference). Every `YoutubeDL` instance shares one `paths` object. Use `copy.deepcopy(Config.ydl_settings)` and mutate the copy.
+- [x] **`item.py`** — `Item.get_item` passes `info.get("formats") or {}`; if `formats` were ever a non-empty dict, iteration yields `str` keys and `format.get` explodes. Use `or []`.
+- [x] **`item.py`** — `get_status` ignores `total_bytes_estimate`, which is what yt-dlp supplies for most fragmented/HLS downloads → `total_bytes = 0` → `rem_bits` goes negative in `view.__update_item`.
   ```diff
   -            data.get("total_bytes") or 0,
   +            data.get("total_bytes") or data.get("total_bytes_estimate") or 0,
   ```
   and clamp in the view: `rem_bits = max(0, total - downloaded) >> 7`.
-- [ ] **`item.py`** — `within_cutoff`: `cutoff == 0` is dead after the walrus (walrus already guarantees truthiness). Simplify.
+- [x] **`item.py`** — `within_cutoff`: `cutoff == 0` is dead after the walrus (walrus already guarantees truthiness). Simplify.
 - [ ] **`view.py`** — `Logger` emits `SleepMessage` with `provider` = extractor name (e.g. `youtube`), but `__update_sleep` only handles `"download"`, `"channel"`, `"sub_channel"`, so yt-dlp's own sleep intervals never show. Either broaden the check or normalise providers in `Logger`.
 - [ ] **`view.py`** — `"sub_channel"` provider is handled but **nothing ever sends it**; `Channel` always sends `"channel"`, so sub-channel top-name reset is unreachable. Send the real provider from `Channel.__extract` based on `__sub_level`.
-- [ ] **`view.py`** — `set_item` computes `self.__item_count - index + 1`; with `__item_count == 0` (non-playlist) this yields negatives. Guard with `if self.__item_count else str(index)`.
+- [x] **`view.py`** — `set_item` computes `self.__item_count - index + 1`; with `__item_count == 0` (non-playlist) this yields negatives. Guard with `if self.__item_count else str(index)`.
 - [ ] **`view.py`** — `__assign_position` silently drops slots when `rows * columns` is exhausted (already flagged by your TODO). At minimum log/mark overflow slots so they aren't invisible.
-- [ ] **`view.py`** — the loop only redraws in the `Empty` branch; under a message flood the UI stalls. Prefer `self.__queue.get(timeout=0.25)` and redraw on a wall-clock tick.
-- [ ] **`terminal.py`** — no `flush()` after `print(...)`; output relies on line buffering. Also `print(ANSI.print())` re-homes the cursor after *every* cell write. Batch a frame into one `sys.stdout.write` + single flush.
+- [x] **`view.py`** — the loop only redraws in the `Empty` branch; under a message flood the UI stalls. Prefer `self.__queue.get(timeout=0.25)` and redraw on a wall-clock tick.
+- [x] **`terminal.py`** — no `flush()` after `print(...)`; output relies on line buffering. Also `print(ANSI.print())` re-homes the cursor after *every* cell write. Batch a frame into one `sys.stdout.write` + single flush.
 - [ ] **`util.py`** — `format_seconds(include_seconds=True, two_parts=True)` with `hr > 0` falls through the `if` block and returns rounded `HH:MM`, dropping seconds. Verify intent; if unintended, return `f"{hr:02}:{mn:02}:{sc:02}"`.
 
 ## 🟡 Robustness / data integrity
@@ -651,7 +652,7 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
 - [ ] **`channel.py`** — errors from yt-dlp reach the View but are never written back to `__last_error`; the channels file only ever records internal errors. Wire `Logger.error` → slot → channel.
 - [ ] **`config.py`** — `save()` catches `FileExistsError` (never raised by `open(..., "w")`) but not `PermissionError`/`IsADirectoryError`/`OSError`. Catch `OSError`.
 - [ ] **`config.py`** — no validation: `Paths.output` defaults to `None` and is passed straight to yt-dlp. Fail fast with a clear message if required settings are missing.
-- [ ] **`config.py`** — `interpret` round-trips lossily: a string value like `007` or `yes` saved unquoted comes back as `int`/`bool`. Quote strings on save.
+- [x] **`config.py`** — `interpret` round-trips lossily: a string value like `007` or `yes` saved unquoted comes back as `int`/`bool`. Quote strings on save.
 - [ ] **`config.py`** — `initialize()` sets `Paths.config = os.path.curdir` but `Config.ini` may be an absolute path elsewhere; derive `path` from `os.path.dirname(os.path.abspath(config_ini))`.
 - [ ] **`main.py`** — no argument parsing/validation. Use `argparse` (`--config`, `--slots`, `--debug`) and validate the config path exists before `Coordinator()` starts threads.
 - [ ] **`main.py`** — the error `print` may land inside/after the alternate screen depending on teardown order. Buffer errors and print them after `View.join()`.
@@ -707,7 +708,16 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
 ## ❓ Questions before I'd change these
 
 - [ ] **`channel.py`** — `sleep_time = min(3600, int(time()) - process_time)` sleeps for *as long as the download took*. Deliberate rate-limiting/politeness heuristic, or was a fixed `Config["Download"]["sleep_interval"]` intended?
+  Politeness
+
 - [ ] **`view.py`** — `set_item` displaying `count - index + 1` (reverse playlist numbering) — deliberate "newest = #1"?
+  Deliberate, the newest items comes first and will have highest index (aka as an episode number)
+
 - [ ] **`coordinator.py`** — `run()` never exits on its own (infinite scheduling loop). Intended as a long-running daemon, or should it terminate after one full pass over all channels?
+  long-running, but keyboard control implementation to let user exit
+
 - [ ] **`channel.py`** — should a playlist parent's `last_download_date` update when *any* child succeeded, when *all* did, or unconditionally (current behaviour)?
+  i have not decided, it is only supposed to be used for cases where the channels are single streams, but no plans for other cases
+
 - [ ] **`slot.py`** — is `Slot.processor_lock` guarding `YoutubeDL()` construction because of the `cookiesfrombrowser` Safari cookie DB, or something else? That determines whether it can be narrowed.
+  Plugins attachment for yt-dlp fails without, don't think cookies are a problem

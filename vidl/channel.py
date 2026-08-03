@@ -1,5 +1,7 @@
 from datetime import datetime
-from time import sleep, time
+from time import time
+
+from vidl.config import Config
 
 from .item import Item
 from .message import ItemMessage, Message, Msg, PlaylistCountMessage, SleepMessage
@@ -20,10 +22,10 @@ class Channel:
     @staticmethod
     def load_channels(file_name):
         channels = []
-        with open(file_name) as f:
+        with open(file_name, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line.startswith("#"):
+                if line or not line.startswith("#"):
                     if line.count(";") > 0:
                         parameters = line.split(";")
                         if len(parameters) == Channel.header_len:
@@ -39,7 +41,7 @@ class Channel:
             write_buffer += channel.write()
         if write_buffer != Channel.header:
             try:
-                with open(file_name, "w") as f:
+                with open(file_name, "w", encoding="utf-8") as f:
                     f.write(write_buffer)
             except FileNotFoundError as e:
                 return e
@@ -54,11 +56,10 @@ class Channel:
         try:
             self.__last_download_date = int(last_dl_dte)
             self.__last_attempt_date = int(last_at_dte)
-        except ValueError, TypeError:
+        except (ValueError, TypeError):
             self.__last_download_date = 0
             self.__last_attempt_date = 0
         self.__last_error = last_error
-        self.__sub_channels = []
         self.__sub_level = sub_level
         self.__item = None
         self.__active = False
@@ -109,16 +110,19 @@ class Channel:
     # ----- Inside slot thread
 
     def download(self, slot, processor, queue, playlist_index=1):
-        if self.__slot_index is None:
-            self.__slot_index = slot
+        if self.__slot_index is not None:
+            return False
+
+        self.__slot_index = slot
+        try:
             self.__set_attempt_date()
-            if self.__extract(processor, queue, playlist_index):
+            result = self.__extract(processor, queue, playlist_index)
+            if result:
                 self.__set_download_date()
-        else:
-            # Should not happen
-            return
-        self.__slot_index = None
-        self.__active = False
+            return result
+        finally:
+            self.__slot_index = None
+            self.__active = False
 
     def __extract(self, processor, queue, playlist_index):
         if self.__halt_event is not None and self.__halt_event.is_set():
@@ -149,7 +153,8 @@ class Channel:
                     )
                 )
             if info.get("_type") == "playlist":
-                if entries := list(info.get("entries")):
+                sub_channels = []
+                if entries := list(info.get("entries", [])):
                     if self.__slot_index is not None:
                         queue.put(
                             Message(
@@ -162,33 +167,35 @@ class Channel:
                             )
                         )
                     for entry in entries:
-                        url = entry.get("webpage_url") or entry.get("url")
-                        self.__sub_channels.append(
-                            Channel(
-                                url,
-                                None,
-                                None,
-                                None,
-                                None,
-                                sub_level=self.__sub_level + 1,
+                        if isinstance(entry, dict) and (
+                            url := (entry.get("webpage_url") or entry.get("url"))
+                        ):
+                            sub_channels.append(
+                                Channel(
+                                    url,
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    sub_level=self.__sub_level + 1,
+                                )
                             )
-                        )
-                if self.__sub_channels:
-                    for playlist_index, channel in enumerate(
-                        self.__sub_channels, start=1
-                    ):
+                if sub_channels:
+                    for playlist_index, channel in enumerate(sub_channels, start=1):
                         channel.set_active()
                         channel.set_halt_event(self.__halt_event)
                         channel.download(
                             self.__slot_index, processor, queue, playlist_index
                         )
-                        self.__set_error(f"({channel.get_last_error()})")
+                        if error := channel.get_last_error():
+                            self.__set_error(f"({error})")
             else:
                 self.__item = Item.get_item(info)
                 if self.__item.valid_format() and self.__item.within_cutoff(self):
                     process_time = int(time())
                     ret = self.__download(processor)
-                    sleep_time = min(3600, int(time()) - process_time)
+                    cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
+                    sleep_time = min(cutoff, int(time()) - process_time)
                     if self.__slot_index is not None:
                         queue.put(
                             Message(
@@ -200,12 +207,8 @@ class Channel:
                                 ),
                             )
                         )
-                        for _ in range(sleep_time >> 3):
-                            if (
-                                self.__halt_event is not None
-                                and not self.__halt_event.is_set()
-                            ):
-                                sleep(8)
+                        if self.__halt_event is not None:
+                            self.__halt_event.wait(sleep_time)
                     return ret
                 else:
                     self.__set_error("No formats or outside cutoff")
@@ -217,7 +220,7 @@ class Channel:
 
     def __download(self, processor):
         if item := self.__item:
-            return processor.download(item.original_url)
+            return processor.download([item.original_url or item.webpage_url]) == 0
 
     def __set_attempt_date(self):
         self.__last_attempt_date = int(time())

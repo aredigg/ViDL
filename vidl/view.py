@@ -14,6 +14,7 @@ from .message import (
     Message,
     Msg,
     PlaylistCountMessage,
+    RedrawMessage,
     SleepMessage,
     URLMessage,
     WarnMessage,
@@ -402,18 +403,6 @@ class View:
             meter = kind * progress + ANSI.Dim + kind * remaining + ANSI.DimReset
             return meter
 
-        def __progress_meter_long(self, length, percent):
-            if length < 1:
-                return ""
-            pad = ""
-            if length & 1:
-                pad = " "
-            length = length >> 1
-            progress = int((length * percent) / 100)
-            remaining = length - progress
-            meter = pad + "╺╸" * progress + ANSI.Dim + "╺╸" * remaining + ANSI.DimReset
-            return meter
-
         def __update_filesize(self):
             if self.__temp_filepath is not None:
                 for filename in [self.__temp_filepath, self.__temp_filepath + ".part"]:
@@ -472,6 +461,8 @@ class View:
                             case Msg.UPDATE:
                                 if isinstance(message.body, ItemMessage):
                                     self.__update_item(message.body)
+                                if isinstance(message.body, RedrawMessage):
+                                    self.__redraw(terminal)
                             case Msg.SLEEP:
                                 if isinstance(message.body, SleepMessage):
                                     self.__update_sleep(message.body)
@@ -519,6 +510,13 @@ class View:
         if ANSI.len(line) < width - 10:
             terminal.print(line, 2, 10)
 
+    def __redraw(self, terminal):
+        terminal.clear()
+        self.__term_size(terminal=terminal)
+        self.__term_header(terminal=terminal)
+        for slot in self.__slots.values():
+            slot.set_size(self.__slot_size)
+
     def __create_slot(self, body):
         if body.provider == "slot":
             slot = View.Slot(body.index)
@@ -536,8 +534,6 @@ class View:
                     slot.set_position(row, column)
                     slot.set_size(self.__slot_size)
                     return
-
-    # TODO: Plan for overflow and reflow when size changes
 
     def __update_sleep(self, body):
         if body.index in self.__slots:

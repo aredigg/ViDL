@@ -4,6 +4,8 @@ from .unicode import Unicode
 
 
 class ANSI:
+    ClearScreen = "\x1b[0m\x1b[2J"
+
     Inverse = "\x1b[7m"
     InverseReset = "\x1b[27m"
 

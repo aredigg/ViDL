@@ -1,75 +1,11 @@
+# TODO List
+
+
 Some of the suggestions are not relevant or necessary.
 
 == Created by OpenAI Sol ==
 
-Below is a static review based on the supplied files. I’ve separated definite defects from behavior that may be intentional.
-
 ## Critical defects
-
-- [x] **`channel.py` — Fix invalid exception syntax.**  
-  This prevents the module from loading under Python 3:
-  ```python
-  except (ValueError, TypeError):
-      self.__last_download_date = 0
-      self.__last_attempt_date = 0
-  ```
-
-- [x] **`view.py` — Fix invalid exception syntax in `__update_filesize()`.**
-  ```python
-  except (FileNotFoundError, OSError):
-      pass
-  ```
-
-- [x] **`coordinator.py` — Fix the scheduler deadlock when all channels are active.**  
-  `__next_channel()` can return `None`. The inner loop then rejects an idle slot whose
-  `channel()` is also `None`, and never recalculates the channel. Select both the
-  channel and slot on each iteration:
-  ```python
-  while self.__running:
-      channel = self.__next_channel()
-      slot = next((slot for slot in self.__slots if slot.ready()), None)
-
-      if channel is not None and slot is not None:
-          channel.set_active()
-          slot.process(channel)
-      else:
-          self.__save_channels()
-          sleep(1)
-  ```
-
-- [x] **`channel.py` — Treat `YoutubeDL.download()` return values correctly.**  
-  yt-dlp returns `0` for success, which is false in Python. Consequently,
-  successful downloads may never update `last_download_date`.
-
-  Also pass a list of URLs rather than a bare string:
-  ```python
-  def __download(self, processor):
-      if self.__item is None:
-          return False
-
-      url = self.__item.original_url or self.__item.webpage_url
-      return bool(url) and processor.download([url]) == 0
-  ```
-
-- [x] **`channel.py` — Always clear `active` and `slot_index` with `finally`.**  
-  Any extraction, hook, logger, or yt-dlp exception currently leaves the channel
-  permanently active:
-  ```python
-  def download(self, slot, processor, queue, playlist_index=1):
-      if self.__slot_index is not None:
-          return False
-
-      self.__slot_index = slot
-      try:
-          self.__set_attempt_date()
-          success = self.__extract(processor, queue, playlist_index)
-          if success:
-              self.__set_download_date()
-          return success
-      finally:
-          self.__slot_index = None
-          self.__active = False
-  ```
 
 - [ ] **`slot.py` — Catch worker exceptions and restore slot state in `finally`.**  
   An unhandled exception kills the slot thread, leaves its channel active, and can
@@ -81,43 +17,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   non-daemon view thread can keep the process alive and leave the terminal in cbreak
   and alternate-screen mode. Put shutdown in a `finally` block.
 
-- [x] **`view.py` — Initialize instance state before starting its thread.**  
-  `self.__thread.start()` currently happens before `self.__slots`, dimensions, and
-  slot size are initialized. The thread can access them immediately and raise
-  `AttributeError`.
-  ```python
-  self.__slots = {}
-  self.__columns = 0
-  self.__rows = 0
-  self.__slot_size = None
-
-  self.__thread = Thread(target=self.__run, name=f"View-{View.index}")
-  self.__thread.start()
-  ```
-
-- [x] **`terminal.py` — Correct the bounds check.**  
-  The chained comparisons can never work as intended:
-  ```python
-  if row < 1 or row > self.__height or col < 1 or col > self.__width:
-      return
-  ```
-
 ## Channel and playlist processing
-
-- [x] **`channel.py` — Clear or replace `__sub_channels` on every playlist extraction.**  
-  It is currently appended to each time the parent channel runs. Recurring playlist
-  checks will repeatedly process old entries and continuously increase memory use.
-
-- [x] **`channel.py` — Handle missing or malformed playlist entries.**
-  ```python
-  entries = list(info.get("entries") or [])
-  for entry in entries:
-      if not isinstance(entry, dict):
-          continue
-      url = entry.get("webpage_url") or entry.get("url")
-      if not url:
-          continue
-  ```
 
 - [ ] **`channel.py` — Aggregate child-channel success correctly.**  
   A playlist currently returns success even when every child fails, causing the
@@ -125,36 +25,9 @@ Below is a static review based on the supplied files. I’ve separated definite 
   succeeded, or distinguish “playlist successfully inspected” from “media
   downloaded.”
 
-- [x] **`channel.py` — Do not overwrite the parent error with `"(None)"`.**  
-  Only copy a child error when one exists. Prefer collecting multiple errors instead
-  of replacing the previous one.
-
 - [ ] **`channel.py` — Decide how a partially successful playlist should be recorded.**  
   Define separate outcomes such as `DOWNLOADED`, `DEFERRED`, `REJECTED`,
   `NO_NEW_ITEMS`, and `ERROR`. A Boolean is becoming too ambiguous for this flow.
-
-- [x] **`channel.py` — Revisit the post-download sleep calculation.**  
-  `sleep_time` is the elapsed download time, capped at one hour:
-  ```python
-  sleep_time = min(3600, int(time()) - process_time)
-  ```
-  If this proportional cooldown is deliberate, document it. Otherwise use the
-  configured sleep interval.
-
-- [x] **`channel.py` — Replace the sleep loop with interruptible event waiting.**  
-  The current loop discards the remainder below eight seconds and performs no sleep
-  if the halt event is absent:
-  ```python
-  if self.__halt_event is not None:
-      self.__halt_event.wait(sleep_time)
-  else:
-      sleep(sleep_time)
-  ```
-
-- [x] **`channel.py` — Report the sleep before actually sleeping only if that is the UI contract.**  
-  At present the view receives a timer and the slot then blocks. That is reasonable,
-  but it should be explicitly documented because the provider names control how the
-  view interprets the message.
 
 - [ ] **`channel.py` — Validate fallback URLs before downloading.**  
   `original_url` can be empty. Fall back to `webpage_url`, and reject the item with a
@@ -165,15 +38,6 @@ Below is a static review based on the supplied files. I’ve separated definite 
   `OverflowError`, `OSError`, or `ValueError`.
 
 ## Configuration and persistence
-
-- [x] **`config.py` / `main.py` — Avoid rewriting configuration on every startup.**  
-  `Config.load()` followed immediately by `Config.save()` removes comments,
-  formatting, and ordering from the user’s file. Only save when creating a default
-  file or when settings actually change.
-
-- [x] **`config.py` — Catch useful write errors.**  
-  Opening a file with `"w"` normally does not raise `FileExistsError`. Catch
-  `OSError` and propagate or return it instead of only printing.
 
 - [ ] **`config.py` — Resolve relative paths against the configuration file.**  
   When a custom configuration path is supplied, channel, archive, output, and debug
@@ -187,28 +51,6 @@ Below is a static review based on the supplied files. I’ve separated definite 
   - resolution and duration values are nonnegative
   - output/config paths have the expected type
   - channel and archive filenames are nonempty
-
-- [x] **`config.py` — Preserve string types during round trips.**  
-  A string such as `"true"` is written without quotes and reloads as Boolean
-  `True`. Add explicit serialization for strings, or use `configparser`, TOML, or
-  another established format.
-
-- [x] **`config.py` / `slot.py` — Do not mutate global nested yt-dlp settings per slot.**  
-  `Config.ydl_settings["paths"]`, logger, and hook arrays are shared. Build a deep
-  copy for every processor:
-  ```python
-  from copy import deepcopy
-
-  settings = deepcopy(Config.ydl_settings)
-  ```
-
-- [x] **`config.py` — Make the hard-coded Safari cookie source configurable.**  
-  This fails on systems without Safari and can make otherwise valid downloads fail.
-  Allow no cookie source, a cookie file, or a configured browser.
-
-- [x] **`config.py` — Verify and simplify the format-selector whitespace.**  
-  The selector contains spaces around one fallback slash. Remove accidental
-  whitespace and add tests that ensure the intended fallback order is selected.
 
 - [ ] **`channel.py` — Make channel-file writes atomic.**  
   Writing directly to the live state file risks truncation after a crash. Write to a
@@ -224,19 +66,7 @@ Below is a static review based on the supplied files. I’ve separated definite 
   Use Python’s `csv` module with `delimiter=";"`, including quoting and explicit
   encoding.
 
-- [x] **All file I/O — Specify an encoding.**  
-  Channel names, errors, and configuration can contain Unicode:
-  ```python
-  with open(file_name, encoding="utf-8") as file:
-      ...
-  ```
-
 ## Slot and coordinator lifecycle
-
-- [x] **`slot.py` — Use the supplied slot index.**  
-  The constructor ignores its `index` argument and uses the static `Slot.index`.
-  This breaks when multiple coordinators are created in the same process. Assign
-  `self.__index = index` and remove the static counter.
 
 - [ ] **`slot.py` — Manage `YoutubeDL` as a context manager.**  
   Ensure resources are cleaned after each channel:
@@ -252,9 +82,6 @@ Below is a static review based on the supplied files. I’ve separated definite 
 - [ ] **`slot.py` / `hook.py` — Define how cancellation exceptions are handled.**  
   `DownloadCancelled` may escape yt-dlp and kill the worker. Catch it explicitly,
   treat it as a normal halt, and avoid presenting it as a download failure.
-
-- [x] **`coordinator.py` — Save once more after all workers have joined.**  
-  Otherwise the last completed download or error can be lost during shutdown.
 
 - [ ] **`coordinator.py` — Avoid saving the complete channel file every second while busy.**  
   Mark state dirty and save on completion, at a lower periodic interval, and during
@@ -299,26 +126,8 @@ Below is a static review based on the supplied files. I’ve separated definite 
   The key ignores bitrate, codec preference, and whether the format contains video
   or audio. It can choose a nonrepresentative format among equal-resolution options.
 
-- [x] **`item.py` — Use a list rather than `{}` as the empty formats collection.**
-  ```python
-  info.get("formats") or []
-  ```
-
 - [ ] **`item.py` — Harden `get_item()` against `None` and malformed extractor data.**  
   It uses `info.get(...)` after partially accounting for `info is None`.
-
-- [x] **`item.py` — Simplify the cutoff condition.**  
-  Inside the walrus block, `cutoff == 0` is unreachable:
-  ```python
-  cutoff = Config.settings["Download"]["playlist_cutoff"]
-  if not cutoff:
-      return True
-  return self.timestamp >= channel.set_epoch_cutoff(cutoff * 86_400)
-  ```
-
-- [x] **`item.py` — Decide how missing timestamps interact with cutoff rules.**  
-  A missing timestamp currently becomes zero and is rejected whenever a cutoff is
-  active. This may incorrectly reject live items or extractors without timestamps.
 
 ## View and terminal behavior
 
@@ -331,10 +140,6 @@ Below is a static review based on the supplied files. I’ve separated definite 
   label = processes.get(item.processor, item.processor or "Unknown")
   ```
 
-- [x] **`view.py` — Handle absent error messages.**  
-  `ErrorMessage.message` is annotated as optional, but `__update_error()` calls
-  `.split()` unconditionally.
-
 - [ ] **`view.py` — Clamp countdown timers at zero or transition state when expired.**  
   `timer()` uses an absolute-value formatter, so after the deadline it starts
   counting upward again.
@@ -342,22 +147,6 @@ Below is a static review based on the supplied files. I’ve separated definite 
 - [ ] **`view.py` — Always clear or print long lines.**  
   Many methods skip printing when content is too long, leaving stale text on screen.
   Let `Terminal.print()` trim it, or clear the full interior line before drawing.
-
-- [x] **`view.py` — Use `ANSI.len()` for decorated or wide-character titles.**  
-  `__border()` uses built-in `len()` when deciding whether the channel title fits.
-
-- [x] **`view.py` — Prevent negative progress-meter widths.**  
-  Small terminals or long ETA text can produce a negative requested meter length.
-  Clamp it with `max(0, length)`.
-
-- [x] **`view.py` — Clamp progress values.**  
-  Percentages and remaining bytes can be negative or exceed 100 when totals are
-  absent or estimates change.
-
-- [ ] **`view.py` — Prefer yt-dlp’s ETA and estimated total when available.**  
-  The manually calculated remaining time only works when total bytes and bitrate are
-  both reliable. Fragmented and live downloads often do not meet that condition.
-    --- NOOOOOOOOOO! --- yt-dlp eta and estimates sucks!!!!!!!!!!!!!!!!!!!
 
 - [ ] **`view.py` — Implement terminal-resize reflow or explicitly document fixed startup sizing.**  
   The size is read only at startup. Slots can become clipped or misplaced after a
@@ -367,18 +156,8 @@ Below is a static review based on the supplied files. I’ve separated definite 
   More worker slots than visible grid cells receive no position and are silently
   invisible. Either cap worker count, add paging, or reflow.
 
-- [x] **`view.py` — Review the reverse playlist index calculation.**  
-  `item_count - index + 1` may be deliberate if entries are newest-first. Document
-  that assumption or display the source playlist index directly.
-
 - [ ] **`view.py` — Remove or display `__top_name_last_dl`.**  
   It is assigned but never rendered.
-
-- [x] **`terminal.py` — Correct available-width calculation.**  
-  Depending on whether columns are inclusive, this likely needs:
-  ```python
-  remaining_space = self.__width - col + 1
-  ```
 
 - [ ] **`terminal.py` — Restore terminal state robustly.**  
   Put terminal restoration in a `finally` path so failure while writing the
@@ -517,62 +296,10 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
 
 ## 🔴 Critical (won't run / crashes threads)
 
-- [x] **`channel.py`** — Python 2 except syntax → `SyntaxError`, module won't import.
-  ```diff
-  -        except ValueError, TypeError:
-  +        except (ValueError, TypeError):
-  ```
-- [x] **`view.py`** — same in `__update_filesize`. `FileNotFoundError` is a subclass of `OSError`, so `OSError` alone suffices.
-  ```diff
-  -                    except FileNotFoundError, OSError:
-  +                    except OSError:
-  ```
-- [x] **`channel.py`** — `__download()` returns yt-dlp's *exit code* (`0` = success), which is falsy. So `if self.__extract(...)` treats every successful download as a failure and `__set_download_date()` never fires.
-  ```diff
-  -    def __download(self, processor):
-  -        if item := self.__item:
-  -            return processor.download(item.original_url)
-  +    def __download(self, processor):
-  +        if item := self.__item:
-  +            return processor.download([item.original_url]) == 0
-  +        return False
-  ```
-- [x] **`view.py`** — `processes[item.processor]` raises `KeyError` for any postprocessor not in the dict (`FFmpegVideoConvertor`, `EmbedSubtitle`, `ExtractAudio`, `SponsorBlock`…), killing the view thread and freezing the UI.
-  ```diff
-  -                    self.__slots[body.index].set_status_message(
-  -                        processes[item.processor], item.status
-  -                    )
-  +                    self.__slots[body.index].set_status_message(
-  +                        processes.get(item.processor, item.processor), item.status
-  +                    )
-  ```
-- [x] **`view.py`** — `__update_error`: `body.message` can be `None` (`ErrorMessage.message: None | str`) → `AttributeError` in the view thread. Guard before `.split(":")`.
 - [ ] **`view.py`** — the whole `__run` loop has no top-level `try/except`. One unhandled exception silently kills rendering while downloads continue. Wrap the message dispatch in `try/except Exception` and surface the error into a slot/status line.
-- [x] **`slot.py`** — `Hook.common` raises `DownloadCancelled` on halt; it propagates out of `channel.download()` and kills the slot thread, so `ready()` is `False` forever and the coordinator spins. Wrap the work in `__run`:
-  ```python
-  try:
-      channel.download(self.__index, processor, self.__view_queue)
-  except DownloadCancelled:
-      pass
-  except Exception as e:  # report, don't die
-      self.__view_queue.put(Message(Msg.ERROR, ErrorMessage(
-          self.__index, "slot", None, str(e))))
-  finally:
-      self.__channel = None
-      self.__ready = True
-  ```
-- [x] **`coordinator.py`** — early returns (`return 1`, `return 2`) skip `self.__view.halt()/join()`. The View thread is non-daemon → the process hangs after "No channels". Restructure with a `finally:` shutdown block, or `return` through a single exit path.
 
 ## 🟠 Logic bugs
 
-- [x] **`terminal.py`** — `if 1 > row > self.__height` is a chained comparison that is *always false*; bounds checking is dead code.
-  ```diff
-  -        if 1 > row > self.__height or 1 > col > self.__width:
-  +        if not (1 <= row <= self.__height and 1 <= col <= self.__width):
-               return
-  -        remaining_space = self.__width - col
-  +        remaining_space = self.__width - col + 1
-  ```
 - [ ] **`ansi.py`** — `ANSI.trim()` is broken: escape positions are recorded against the *original* string (including escape lengths) but re-inserted into the *stripped* string, so colors land at wrong offsets; the `while ANSI.len(...)` loop is also O(n²). Rewrite as a single left-to-right walk that accumulates visible width and passes escapes through:
   ```python
   @staticmethod
@@ -592,57 +319,18 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
           pos += 1
       return "".join(out)
   ```
-- [x] **`channel.py`** — `Channel.load_channels` turns *blank lines* into channels (`""` name, `None` url). Skip empty lines: `if not line or line.startswith("#"): continue`.
 - [ ] **`channel.py`** — sub-channel loop shadows the `playlist_index` parameter and overwrites `__last_error` on every iteration, producing `"(None)"` when the sub-channel succeeded. Collect errors instead:
   ```python
   errors = [c.get_last_error() for c in self.__sub_channels if c.get_last_error()]
   if errors:
       self.__set_error(f"{len(errors)} sub-errors: {errors[-1]}")
   ```
-- [x] **`channel.py`** — halt busy-loop: when the event *is* set it iterates `sleep_time >> 3` times doing nothing instead of breaking. Also the condition is inverted-looking.
-  ```diff
-  -                        for _ in range(sleep_time >> 3):
-  -                            if (
-  -                                self.__halt_event is not None
-  -                                and not self.__halt_event.is_set()
-  -                            ):
-  -                                sleep(8)
-  +                        if self.__halt_event is not None:
-  +                            self.__halt_event.wait(sleep_time)
-  +                        else:
-  +                            sleep(sleep_time)
-  ```
-- [x] **`channel.py`** — `entries = list(info.get("entries"))` → `TypeError` when a playlist has no `entries` key. Use `info.get("entries") or []`.
 - [ ] **`channel.py`** — for playlists `__extract` returns `True` unconditionally, so the parent's download date is bumped even if every sub-channel failed. Return `any(...)`/`all(...)` of the sub results (confirm intent — see questions).
 - [ ] **`channel.py`** — unbounded recursion depth for nested playlists (playlist → playlist → …). Add a `max_sub_level` guard from `Config`.
-- [x] **`coordinator.py`** — when all channels are active, `__next_channel()` returns `None`, and `slot.channel() != channel` is `False` for every idle slot (idle slots hold `None`), so the loop spins at 1 Hz **rewriting the channels file every second**. Guard on `channel is None` before slot search, and throttle saves:
-  ```python
-  channel = self.__next_channel()
-  if channel is None:
-      self.__halt_event.wait(1)  # or sleep(1)
-      continue
-  ```
 - [ ] **`coordinator.py`** — `Channel` state is mutated from slot threads while the coordinator serialises it → torn writes. Add a lock around `write()`/mutators, or snapshot under a lock before saving.
-- [x] **`slot.py`** — the `index` argument is ignored (`self.__index = Slot.index`) while the thread name uses `index`. If they ever diverge, view slots and log lines desync. Pick one:
-  ```diff
-  -        self.__index = Slot.index
-  +        self.__index = index
-  ```
-- [x] **`slot.py`** — `__setup` mutates the *shared* `Config.ydl_settings` (including the nested `paths` dict, which `dict(settings)` copies by reference). Every `YoutubeDL` instance shares one `paths` object. Use `copy.deepcopy(Config.ydl_settings)` and mutate the copy.
-- [x] **`item.py`** — `Item.get_item` passes `info.get("formats") or {}`; if `formats` were ever a non-empty dict, iteration yields `str` keys and `format.get` explodes. Use `or []`.
-- [x] **`item.py`** — `get_status` ignores `total_bytes_estimate`, which is what yt-dlp supplies for most fragmented/HLS downloads → `total_bytes = 0` → `rem_bits` goes negative in `view.__update_item`.
-  ```diff
-  -            data.get("total_bytes") or 0,
-  +            data.get("total_bytes") or data.get("total_bytes_estimate") or 0,
-  ```
-  and clamp in the view: `rem_bits = max(0, total - downloaded) >> 7`.
-- [x] **`item.py`** — `within_cutoff`: `cutoff == 0` is dead after the walrus (walrus already guarantees truthiness). Simplify.
 - [ ] **`view.py`** — `Logger` emits `SleepMessage` with `provider` = extractor name (e.g. `youtube`), but `__update_sleep` only handles `"download"`, `"channel"`, `"sub_channel"`, so yt-dlp's own sleep intervals never show. Either broaden the check or normalise providers in `Logger`.
 - [ ] **`view.py`** — `"sub_channel"` provider is handled but **nothing ever sends it**; `Channel` always sends `"channel"`, so sub-channel top-name reset is unreachable. Send the real provider from `Channel.__extract` based on `__sub_level`.
-- [x] **`view.py`** — `set_item` computes `self.__item_count - index + 1`; with `__item_count == 0` (non-playlist) this yields negatives. Guard with `if self.__item_count else str(index)`.
 - [ ] **`view.py`** — `__assign_position` silently drops slots when `rows * columns` is exhausted (already flagged by your TODO). At minimum log/mark overflow slots so they aren't invisible.
-- [x] **`view.py`** — the loop only redraws in the `Empty` branch; under a message flood the UI stalls. Prefer `self.__queue.get(timeout=0.25)` and redraw on a wall-clock tick.
-- [x] **`terminal.py`** — no `flush()` after `print(...)`; output relies on line buffering. Also `print(ANSI.print())` re-homes the cursor after *every* cell write. Batch a frame into one `sys.stdout.write` + single flush.
 - [ ] **`util.py`** — `format_seconds(include_seconds=True, two_parts=True)` with `hr > 0` falls through the `if` block and returns rounded `HH:MM`, dropping seconds. Verify intent; if unintended, return `f"{hr:02}:{mn:02}:{sc:02}"`.
 
 ## 🟡 Robustness / data integrity
@@ -652,7 +340,6 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
 - [ ] **`channel.py`** — errors from yt-dlp reach the View but are never written back to `__last_error`; the channels file only ever records internal errors. Wire `Logger.error` → slot → channel.
 - [ ] **`config.py`** — `save()` catches `FileExistsError` (never raised by `open(..., "w")`) but not `PermissionError`/`IsADirectoryError`/`OSError`. Catch `OSError`.
 - [ ] **`config.py`** — no validation: `Paths.output` defaults to `None` and is passed straight to yt-dlp. Fail fast with a clear message if required settings are missing.
-- [x] **`config.py`** — `interpret` round-trips lossily: a string value like `007` or `yes` saved unquoted comes back as `int`/`bool`. Quote strings on save.
 - [ ] **`config.py`** — `initialize()` sets `Paths.config = os.path.curdir` but `Config.ini` may be an absolute path elsewhere; derive `path` from `os.path.dirname(os.path.abspath(config_ini))`.
 - [ ] **`main.py`** — no argument parsing/validation. Use `argparse` (`--config`, `--slots`, `--debug`) and validate the config path exists before `Coordinator()` starts threads.
 - [ ] **`main.py`** — the error `print` may land inside/after the alternate screen depending on teardown order. Buffer errors and print them after `View.join()`.
@@ -721,3 +408,780 @@ The first work I would do is: fix the two syntax errors, repair coordinator sche
 
 - [ ] **`slot.py`** — is `Slot.processor_lock` guarding `YoutubeDL()` construction because of the `cookiesfrombrowser` Safari cookie DB, or something else? That determines whether it can be narrowed.
   Plugins attachment for yt-dlp fails without, don't think cookies are a problem
+
+== Created by Anthropic Opus 5 ==
+
+# Code suggestions
+
+## channel.py
+
+**Outcome instead of bool** (resolves aggregation, partial playlists, and hold semantics at once):
+
+```python
+from enum import Enum, auto
+
+
+class Outcome(Enum):
+    DOWNLOADED = auto()
+    NO_NEW_ITEMS = auto()
+    DEFERRED = auto()
+    REJECTED = auto()
+    ERROR = auto()
+
+    def bumps_download_date(self):
+        return self is Outcome.DOWNLOADED
+```
+
+```python
+def download(self, slot, processor, queue, playlist_index=1):
+    if self.__slot_index is not None:
+        return Outcome.ERROR
+    self.__slot_index = slot
+    try:
+        self.__set_attempt_date()
+        outcome = self.__extract(processor, queue, playlist_index)
+        if outcome.bumps_download_date():
+            self.__set_download_date()
+        return outcome
+    finally:
+        self.__slot_index = None
+        self.__active = False
+```
+
+**Playlist aggregation + error collection + no parameter shadowing:**
+
+```python
+outcomes, errors = [], []
+for index, child in enumerate(sub_channels, start=1):
+    child.set_active()
+    child.set_halt_event(self.__halt_event)
+    outcomes.append(child.download(self.__slot_index, processor, queue, index))
+    if error := child.get_last_error():
+        errors.append(error)
+
+if errors:
+    self.__set_error(f"{len(errors)} sub-errors; last: {errors[-1]}")
+if any(outcome is Outcome.DOWNLOADED for outcome in outcomes):
+    return Outcome.DOWNLOADED
+if any(outcome is Outcome.ERROR for outcome in outcomes):
+    return Outcome.ERROR
+return Outcome.NO_NEW_ITEMS
+```
+
+**Provider name for sub-channels** (makes `view.__update_sleep`'s `"sub_channel"` branch reachable):
+
+```python
+provider = "channel" if self.__sub_level == 0 else "sub_channel"
+```
+
+---
+
+## config.py
+
+**Anchor relative paths to the config file:**
+
+```python
+@staticmethod
+def initialize(config_ini=ini):
+    Config.ini = os.path.abspath(config_ini)
+    Config.path = os.path.dirname(Config.ini)
+    Config.settings["Paths"]["config"] = Config.path
+
+
+@staticmethod
+def resolve(path):
+    if not path:
+        return path
+    return path if os.path.isabs(path) else os.path.join(Config.path, path)
+```
+
+Call `Config.resolve()` at the point of use (`Channels.file_name`, `Channels.archived`, `Paths.output`, `Debug.file_name`), not at load time, so saving stays lossless.
+
+---
+
+## main.py
+
+```python
+import argparse
+import signal
+import sys
+import tempfile
+
+from .config import Config
+from .coordinator import Coordinator
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(prog="vidl")
+    parser.add_argument("--config", default=Config.ini)
+    parser.add_argument("--slots", type=int)
+    parser.add_argument("--debug", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv) -> int:
+    args = parse_args(argv)
+    Config.initialize(args.config)
+    Config.load()
+    if args.slots is not None:
+        Config.settings["Channels"]["slots"] = args.slots
+    if args.debug:
+        Config.settings["Debug"]["active"] = True
+
+    if errors := Config.validate():
+        for error in errors:
+            print(f"CONFIG: {error}", file=sys.stderr)
+        return 2
+
+    status, error = 0, None
+    try:
+        with tempfile.TemporaryDirectory() as temp:
+            Config.settings["Paths"]["temporary"] = temp
+            coord = Coordinator()
+            signal.signal(signal.SIGTERM, lambda *_: coord.halt())
+            status = coord.run()
+            error = coord.error()
+    except Exception as e:  # terminal is already restored by View teardown
+        status, error = 3, e
+
+    if error is not None:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return status or 3
+    if status == 0:
+        print("Done.")
+    return status
+```
+
+Cleanup happens inside `Coordinator.run()`'s `finally` (View → Terminal `__exit__`), so every `print` here lands on the real screen.
+
+---
+
+## coordinator.py
+
+**Periodic dirty save + dead-slot detection + keyboard exit:**
+
+```python
+SAVE_INTERVAL = 30
+
+def run(self):
+    try:
+        ...
+        last_save = time()
+        while self.__running:
+            self.__poll_input()
+            if dead := [slot for slot in self.__slots if not slot.alive()]:
+                self.__error = f"{len(dead)} worker slot(s) terminated unexpectedly"
+                self.__running = False
+                break
+
+            channel = self.__next_channel()
+            slot = next((slot for slot in self.__slots if slot.ready()), None)
+            if channel is not None and slot is not None:
+                channel.set_active()
+                slot.process(channel)
+                self.__dirty = True
+            else:
+                self.__halt_event.wait(1)
+
+            if self.__dirty and time() - last_save >= self.SAVE_INTERVAL:
+                self.__save_channels()
+                self.__dirty = False
+                last_save = time()
+    finally:
+        ...
+```
+
+```python
+def __poll_input(self):
+    try:
+        key = self.__input_queue.get_nowait()
+    except Empty:
+        return
+    if key in ("q", "Q", "\x03", "\x04"):
+        self.halt()
+
+
+def halt(self):
+    self.__running = False
+    self.__halt_event.set()
+```
+
+The coordinator needs its own `self.__halt_event = Event()` so `wait(1)` is interruptible by `q`.
+
+---
+
+## slot.py
+
+```python
+def alive(self):
+    return self.__thread.is_alive()
+```
+
+```python
+with Slot.processor_lock:
+    processor = self.__setup(channel)
+channel.set_halt_event(self.__halt_event)
+try:
+    with processor:
+        channel.download(self.__index, processor, self.__view_queue)
+except DownloadCancelled:
+    ...
+```
+
+Drop the bare `sleep(3)` after `download()` — the politeness sleep already lives in `Channel.__extract`.
+
+---
+
+## hook.py
+
+Do not define your own exception. yt-dlp already has one that its own error handling recognises and refuses to swallow under `ignoreerrors`:
+
+```python
+from yt_dlp.utils import DownloadCancelled
+```
+
+Delete the local class and import it in `slot.py` from the same place.
+
+---
+
+## item.py
+
+**Decision instead of bool:**
+
+```python
+from enum import Enum, auto
+
+
+class Decision(Enum):
+    ACCEPT = auto()
+    DEFER = auto()
+    REJECT = auto()
+
+
+def decide(self, first_seen=None):
+    download = Config.settings["Download"]
+    if not self.height or not self.width:
+        return Decision.DEFER, "unknown resolution"
+    if not download["allow_vertical"] and self.height > self.width:
+        return Decision.REJECT, "vertical"
+    if (minimum := download["minimum_resolution"]) and self.height < minimum:
+        if self.__within_hold(first_seen):
+            return Decision.DEFER, f"below {minimum}p, holding"
+        return Decision.REJECT, f"below {minimum}p"
+    if minimum := download["minimum_duration"]:
+        if not self.duration:
+            return Decision.DEFER, "unknown duration"
+        if self.duration < minimum:
+            return Decision.REJECT, f"shorter than {minimum}s"
+    return Decision.ACCEPT, ""
+
+
+def __within_hold(self, first_seen):
+    days = Config.settings["Download"]["resolution_hold_days"]
+    if not days or first_seen is None:
+        return False
+    return int(time()) - first_seen < days * 86_400
+```
+
+`first_seen` comes from the state store (below), **not** from `timestamp` — that is exactly the value that can be absent or wrong.
+
+Cutoff precedence: check `within_cutoff()` first and let it win, so a held item that ages past the cutoff becomes a clean `REJECT` with reason `"outside cutoff"` instead of being held forever.
+
+**Harden `get_item`:**
+
+```python
+@staticmethod
+def get_item(info):
+    info = info if isinstance(info, dict) else {}
+    return Item(
+        *(
+            Item.get_details(info)
+            + Item.selected_format(info)
+            + Item.get_status({})
+        )
+    )
+```
+
+**Display what will actually be downloaded:**
+
+```python
+@staticmethod
+def selected_format(info):
+    requested = info.get("requested_formats") or info.get("requested_downloads")
+    if requested:
+        video = next(
+            (f for f in requested if (f.get("vcodec") or "none") != "none"),
+            requested[0],
+        )
+        audio = next(
+            (f for f in requested if (f.get("acodec") or "none") != "none"), {}
+        )
+        merged = dict(video)
+        for key in ("asr", "audio_channels", "acodec"):
+            if not merged.get(key) or merged.get(key) == "none":
+                merged[key] = audio.get(key)
+        return Item.get_format(merged)
+    return Item.enumerate_best_format(info.get("formats") or [])
+```
+
+**Better ordering** for the pre-extraction fallback (video-bearing only, bitrate as tiebreak):
+
+```python
+def key(format):
+    return (
+        format.get("height") or 0,
+        format.get("fps") or 0,
+        (format.get("dynamic_range") or "SDR").upper() != "SDR",
+        format.get("vbr") or format.get("tbr") or 0,
+    )
+
+matching = [
+    format
+    for format in formats
+    if (format.get("ext") or "").lower() == extension.lower()
+    and (format.get("vcodec") or "none") != "none"
+]
+```
+
+**Structural refactor** — the 60-field positional constructor is the highest-risk code you have. Minimum viable fix without a full split: build a dict and expand it.
+
+```python
+@staticmethod
+def get_details(info) -> dict:
+    return {
+        "id": info.get("id") or "",
+        "title": info.get("title") or "",
+        ...
+    }
+
+Item(**(Item.get_details(info) | Item.selected_format(info) | Item.get_status({})))
+```
+
+Field order stops mattering, and a typo becomes a `TypeError` at construction rather than 30 silently mis-assigned attributes.
+
+---
+
+## view.py
+
+**Guard the dispatch, keep the loop alive:**
+
+```python
+try:
+    self.__dispatch(message)
+except Exception as e:
+    self.__report_internal_error(message, e)
+```
+
+```python
+def __report_internal_error(self, message, error):
+    index = getattr(getattr(message, "body", None), "index", None)
+    if index in self.__slots:
+        self.__slots[index].set_status_message("View", f"{type(error).__name__}: {error}")
+        self.__slots[index].set_status(View.Status.ERROR)
+```
+
+**Countdown clamp (and sign fix — the current expression counts up):**
+
+```python
+def timer(self):
+    if self.__timer is None:
+        return "--:--"
+    remaining = self.__timer - int(time())
+    if remaining <= 0:
+        if self.__status is View.Status.SLEEPING:
+            self.__status = View.Status.WAITING
+        return "00:00"
+    return Util.format_seconds(remaining)
+```
+
+**One line writer, always clears:**
+
+```python
+def __write(self, terminal, text, row, col, width):
+    text = ANSI.trim(text, width)
+    terminal.print(text + " " * max(0, width - ANSI.len(text)), row, col)
+```
+
+Replace every `if line_len < w - 10: terminal.print(...)` with this. Stale text stops persisting on narrow terminals.
+
+**Resize reflow** (cheap, once per second):
+
+```python
+size = terminal.get_size()
+if size != self.__last_size:
+    self.__last_size = size
+    self.__term_size(terminal)
+    for slot in self.__slots.values():
+        slot.set_position(None)
+    for slot in self.__slots.values():
+        self.__assign_position(slot)
+    terminal.clear()
+    self.__term_header(terminal)
+    full_count = 0
+```
+
+**Overflow visibility:**
+
+```python
+def __assign_position(self, slot):
+    for row in range(self.__rows):
+        for column in range(self.__columns):
+            ...
+    slot.set_position(None)
+    self.__hidden += 1
+```
+
+and render `f"{self.__hidden} slot(s) hidden — enlarge terminal"` in the header. Simplest alternative: have `Coordinator` clamp `slots` to `rows * columns` at startup.
+
+**Render `__top_name_last_dl`** on the right edge of the border:
+
+```python
+suffix = f" last {self.__top_name_last_dl} " if self.__top_name_last_dl else ""
+fill = "─" * max(0, w - 4 - ANSI.len(header) - ANSI.len(suffix))
+terminal.print("╭──" + header + fill + suffix + "╮", r, c)
+```
+
+**yt-dlp's own sleeps** currently vanish because the provider is an extractor name:
+
+```python
+def __update_sleep(self, body):
+    slot = self.__slots.get(body.index)
+    if slot is None:
+        return
+    if body.provider == "download":
+        slot.set_timer(body.time_offset + 1)
+        slot.set_status(View.Status.WAITING)
+    elif body.provider in ("channel", "sub_channel"):
+        slot.set_timer(body.time_offset)
+        slot.reset()
+        if body.provider == "sub_channel":
+            slot.set_top("", "")
+        slot.set_status_message(
+            "Sleeping", f"ETA {Util.get_time(int(time()) + body.time_offset)}"
+        )
+        slot.set_status(View.Status.SLEEPING)
+    else:  # extractor rate-limit sleep
+        slot.set_timer(body.time_offset)
+        slot.set_status_message(body.provider, "Rate limited")
+        slot.set_status(View.Status.WAITING)
+```
+
+**Dispatch table** replacing the `isinstance` ladder:
+
+```python
+from functools import singledispatchmethod
+
+@singledispatchmethod
+def __dispatch_body(self, body):
+    ...
+
+@__dispatch_body.register
+def _(self, body: InitMessage):
+    self.__create_slot(body)
+
+@__dispatch_body.register
+def _(self, body: ItemMessage):
+    self.__update_item(body)
+```
+
+`Msg.kind` then becomes redundant for everything except `HALT`.
+
+**`View.Slot` split** — extract the pure part so it can be tested without a TTY:
+
+```python
+class SlotRenderer:
+    def lines(self, state, width, height) -> list[tuple[int, int, str]]:
+        """Pure: state -> positioned strings. No terminal, no I/O."""
+```
+
+`Slot.update()` becomes `for row, col, text in renderer.lines(...): terminal.print(text, row, col)`.
+
+---
+
+## terminal.py
+
+**Restore under `finally`, tolerate non-TTY, batch the frame:**
+
+```python
+def __enter__(self):
+    self.__interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not self.__interactive:
+        return self
+    self.__fd = sys.stdin.fileno()
+    try:
+        self.__old_termios = termios.tcgetattr(self.__fd)
+        tty.setcbreak(self.__fd)
+    except termios.error:
+        self.__interactive = False
+        return self
+    sys.stdout.write(ANSI.Alternate.Enter)
+    sys.stdout.flush()
+    self.__reader = Thread(target=self.__read_input, daemon=True, name="Terminal-input")
+    self.__reader.start()
+    return self
+
+
+def __exit__(self, exc_type, exc, tb):
+    if not self.__interactive:
+        return
+    try:
+        sys.stdout.write(ANSI.Alternate.Leave)
+        sys.stdout.flush()
+    finally:
+        if self.__old_termios is not None and self.__fd is not None:
+            termios.tcsetattr(self.__fd, termios.TCSADRAIN, self.__old_termios)
+```
+
+```python
+def print(self, string, row, col):
+    if not self.__interactive:
+        return
+    if not (1 <= row <= self.__height and 1 <= col <= self.__width):
+        return
+    remaining = self.__width - col + 1
+    if ANSI.len(string) > remaining:
+        string = ANSI.trim(string, remaining)
+    self.__buffer.append(ANSI.at(string, row, col))
+
+
+def flush(self):
+    if not self.__buffer:
+        return
+    self.__buffer.append(ANSI.at())
+    sys.stdout.write("".join(self.__buffer))
+    sys.stdout.flush()
+    self.__buffer.clear()
+```
+
+One `write` + one `flush` per frame instead of one per cell — that alone removes most of the visible tearing.
+
+```python
+def __read_input(self):
+    while not self.__halt.is_set():
+        if select.select([sys.stdin], [], [], 0.2)[0]:
+            if char := sys.stdin.read(1):
+                self.__input_queue.put(char)
+```
+
+Platform: keep `termios`/`tty` imports at module level but document POSIX-only in the README, and let the non-interactive branch above degrade to silent/no-op rendering so `vidl > log.txt` works.
+
+---
+
+## ansi.py
+
+**Token-aware `trim`, OSC-aware `remove`:**
+
+```python
+ESCAPE = re.compile(
+    r"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])"
+)
+
+
+@staticmethod
+def remove(string):
+    return ANSI.ESCAPE.sub("", string)
+
+
+@staticmethod
+def trim(string, length):
+    out, width, pos = [], 0, 0
+    while pos < len(string):
+        if match := ANSI.ESCAPE.match(string, pos):
+            out.append(match.group())
+            pos = match.end()
+            continue
+        char_width = Unicode.len(string[pos])
+        if width + char_width > length:
+            break
+        out.append(string[pos])
+        width += char_width
+        pos += 1
+    return "".join(out)
+```
+
+Single left-to-right pass: O(n), and escapes never get re-inserted at wrong offsets.
+
+**No `assert`, no shadowed builtins:**
+
+```python
+@staticmethod
+def __get_rgb(hex_string):
+    value = hex_string.removeprefix("#")
+    if len(value) != 6 or any(c not in "0123456789abcdefABCDEF" for c in value):
+        raise ValueError(f"Invalid hex colour: {hex_string!r}")
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+```
+
+Rename `ANSI.len` → `ANSI.width`, `ANSI.print` → `ANSI.at`, `Unicode.len` → `Unicode.width`. Mechanical, and it makes the `len()`/`ANSI.len()` bug class impossible to write.
+
+---
+
+## logger.py
+
+Keep the nested target in the record:
+
+```python
+self.__write(
+    logging.ERROR,
+    f"{self.__slot_index} | {provider:>20.20} | {target or '-'} | {provider_message}",
+)
+```
+
+Truthiness: `if match := self.__parse_prefix(...)` discards a legitimately empty target. Use explicit `is not None`:
+
+```python
+match = self.__parse_prefix("Extracting URL: ", message)
+if match is not None:
+    ...
+```
+
+Add the error sink from the channel section:
+
+```python
+def __init__(self, view_queue, slot_index, on_error=None) -> None:
+    ...
+    self.__on_error = on_error
+```
+
+and call `self.__on_error(provider_message)` in `error()` so the channels file records real yt-dlp failures instead of only internal ones.
+
+---
+
+## message.py
+
+Annotate the body as non-optional except for `HALT`, and drop the runtime `isinstance` ladder in favour of `singledispatchmethod` (above). Then:
+
+```python
+@dataclass(frozen=True, slots=True)
+class Message:
+    kind: Msg
+    body: ProviderMessage | None
+```
+
+`frozen=True` documents that messages cross a thread boundary and must not be mutated by the consumer. Delete the trailing design comments — move them to `docs/design.md` if they still describe intent.
+
+
+---
+
+## util.py
+
+`format_seconds(include_seconds=True, two_parts=True)` with `hr > 0` falls through and returns rounded `HH:MM`, silently dropping the seconds the caller asked for:
+
+```python
+@staticmethod
+def format_seconds(seconds, include_seconds=True, two_parts=True):
+    seconds = abs(int(seconds))
+    hr, remainder = divmod(seconds, 3600)
+    mn, sc = divmod(remainder, 60)
+    if include_seconds:
+        if two_parts and hr == 0:
+            return f"{mn:02}:{sc:02}"
+        return f"{hr:02}:{mn:02}:{sc:02}"
+    if sc > 0:
+        mn, hr = (mn + 1, hr) if mn < 59 else (0, hr + 1)
+    return f"{hr:02}:{mn:02}"
+```
+
+Confirm the intent for `two_parts=True, hr > 0` — I assumed "show `HH:MM:SS` rather than lose precision".
+
+---
+
+## Tooling
+
+```toml
+[project.scripts]
+vidl = "vidl.main:main"
+
+[project]
+dependencies = ["yt-dlp>=2025.1.1", "wcwidth>=0.2.13", "grapheme>=0.6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "A", "BLE", "C90", "RUF"]
+
+[tool.mypy]
+strict = true
+```
+
+```bash
+python -m compileall -q vidl
+ruff check .
+mypy vidl
+pytest
+```
+
+Highest value tests, in order: `Config.interpret` round-trip · `ANSI.trim`/`ANSI.width` · `Unicode.width` · `Util.format_seconds` · `Channel.load_channels`/`save_channels` round-trip with `;`, newlines, Unicode, `None` · `Item.decide` table-driven · coordinator "all slots busy, then one completes" · `__download` returning `0`.
+
+---
+
+# Checklist
+
+## 🔴 Blocking
+- [ ] `channel.py` — validate URL in `__download`, return `False` if none
+- [ ] `channel.py` — guard `datetime.fromtimestamp()` against bad epochs
+- [ ] `coordinator.py` — restore periodic saves (dirty flag + interval); currently only on exit
+- [ ] `coordinator.py` — detect dead slot threads, fail with a message
+- [ ] `view.py` — `try/except` around message dispatch so one bad message can't kill rendering
+- [ ] `view.py` — `timer()` counts up after expiry; clamp at `00:00` and fix the sign
+- [ ] `terminal.py` — restore termios in `finally`; tolerate non-TTY stdin
+- [ ] `main.py` — drop redundant `Config.save()`; `argparse`; catch top-level exceptions
+
+## 🟠 Correctness
+- [ ] `channel.py` — `Outcome` enum; only `DOWNLOADED` bumps the date
+- [ ] `channel.py` — aggregate child outcomes; collect errors instead of overwriting
+- [ ] `channel.py` — rename shadowed `playlist_index` loop variable
+- [ ] `channel.py` — `max_sub_level` recursion guard
+- [ ] `channel.py` — send `"sub_channel"` provider so the view branch is reachable
+- [ ] `item.py` — implement `minimum_duration`
+- [ ] `item.py` — `Decision` enum; unknown resolution/duration → `DEFER`, not accept
+- [ ] `item.py` — harden `get_item()` against non-dict info
+- [ ] `item.py` — display `requested_formats`, not an independently chosen format
+- [ ] `item.py` — best-format key: video-bearing only, bitrate tiebreak
+- [ ] `view.py` — route unknown sleep providers (yt-dlp rate limits) to the UI
+- [ ] `util.py` — `format_seconds` drops seconds when `hr > 0` *(confirm intent)*
+
+## 🟡 Data integrity
+- [ ] `channel.py` — `csv` module for read/write (`;` and newlines in titles)
+- [ ] `channel.py` — atomic save: tempfile → `fsync` → `os.replace`
+- [ ] `channel.py` — `state_lock` around mutators; snapshot rows before writing
+- [ ] `channel.py` — write empty fields, not literal `"None"`
+- [ ] `channel.py` — feed yt-dlp errors back via a `Logger` callback
+- [ ] `config.py` — resolve relative paths against the config file's directory
+- [ ] `config.py` — `validate()`; `main` fails fast
+- [ ] `hook.py` / `slot.py` — use `yt_dlp.utils.DownloadCancelled`, drop the local class
+- [ ] `slot.py` — `YoutubeDL` as context manager; add `alive()`; drop stray `sleep(3)`
+- [ ] Signals — `SIGINT`/`SIGTERM` → shared halt event
+
+## 🔵 Rendering
+- [ ] `view.py` — single `__write()` helper that always clears the full line
+- [ ] `view.py` — resize reflow (compare size each tick, clear + reassign)
+- [ ] `view.py` — handle slot overflow visibly, or clamp slot count
+- [ ] `view.py` — render `__top_name_last_dl` (or delete it)
+- [ ] `terminal.py` — buffer a whole frame, one `write` + one `flush`
+- [ ] `terminal.py` — input reader thread; coordinator handles `q` to quit
+- [ ] `ansi.py` — token-aware `trim()`; OSC-aware `remove()`
+- [ ] `ansi.py` — `ValueError` instead of `assert`
+- [ ] `ansi.py` — rename `hex`, `len`, `print`
+- [ ] `unicode.py` — replace with `wcwidth` + `grapheme`
+
+## 🟢 Features
+- [ ] SQLite state store keyed on `(extractor_key, id)`
+- [ ] Reject archive: reason + `rule_version`; transient failures stay retryable
+- [ ] Resolution hold: persist `first_seen`, `best_height`, `deadline`, `retry_after`
+- [ ] Deferred items excluded from `download_archive`
+- [ ] `hold_expiry_action = accept | reject`; cutoff takes precedence over hold
+- [ ] `View.Status.HELD` + "held until" status line
+
+## ⚪ Refactor / tooling
+- [ ] `item.py` — dict-based construction (or `Details`/`Format`/`Progress` split)
+- [ ] `view.py` — `singledispatchmethod` dispatch; extract `SlotRenderer`
+- [ ] `channel.py` — split record/persistence from job execution
+- [ ] `channel.py` — `set_epoch_cutoff` → cached `epoch_cutoff()`
+- [ ] `logger.py` — real `logging` + rotation; keep `target` in records; `is not None` checks
+- [ ] `message.py` — `frozen=True`; delete stale comments
+- [ ] `config.py` — migrate to `tomllib` + typed dataclass
+- [ ] Dead code — `__progress_meter_long`, `get_id`, `get_top`, `View.ready()`, `Config.print()`
+- [ ] `pyproject.toml` — deps, entry point, ruff + mypy
+- [ ] Tests — `compileall` in CI, then the priority list above

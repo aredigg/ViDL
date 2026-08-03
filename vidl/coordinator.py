@@ -1,7 +1,9 @@
+from signal import SIGTERM, SIGWINCH, signal
 from time import sleep
 
 from .channel import Channel
 from .config import Config
+from .message import Message, Msg, RedrawMessage
 from .slot import Slot
 from .view import View
 
@@ -25,6 +27,8 @@ class Coordinator:
             max(1, Config.settings["Channels"]["slots"]), len(self.__channels)
         )
         self.__slots = [Slot(i, self.__view_queue) for i in range(number_of_slots)]
+        signal(SIGTERM, lambda *_: self.halt())
+        signal(SIGWINCH, lambda *_: self.redraw())
 
     def __save_channels(self):
         ret = Channel.save_channels(
@@ -73,4 +77,14 @@ class Coordinator:
             (channel for channel in self.__channels if not channel.active()),
             key=lambda channel: channel.get_last_date(),
             default=None,
+        )
+
+    def halt(self):
+        self.__running = False
+
+    def redraw(self):
+        self.__view_queue.put(
+            Message(
+                kind=Msg.UPDATE, body=RedrawMessage(index=-1, provider="coordinator")
+            )
         )

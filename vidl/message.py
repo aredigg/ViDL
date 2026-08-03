@@ -58,6 +58,10 @@ class FilePathMessage(ProviderMessage):
 
 
 @dataclass
+class RedrawMessage(ProviderMessage): ...
+
+
+@dataclass
 class ItemMessage(ProviderMessage):
     item: Item
     name: None | str

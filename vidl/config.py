@@ -1,6 +1,7 @@
 # A singleton class for accessing and reading/writing configuration data
 
 import os
+import sys
 
 
 class Config:
@@ -129,6 +130,39 @@ class Config:
             if value.casefold() in ["false", "no"]:
                 return False
         return value
+
+    @staticmethod
+    def validate():
+        result = True
+        download = Config.settings["Download"]
+        for key in (
+            "minimum_resolution",
+            "minimum_duration",
+            "playlist_cutoff",
+            "sleep_interval",
+            "post_sleep_cutoff",
+        ):
+            value = download.get(key)
+            if not isinstance(value, int) or value < 0:
+                print(
+                    f"ERROR: Download.{key} must be a non-negative integer",
+                    file=sys.stderr,
+                )
+                result = False
+        if not isinstance(Config.settings["Channels"]["slots"], int):
+            print("ERROR: Slots must be an integer", file=sys.stderr)
+            result = False
+        elif Config.settings["Channels"]["slots"] < 0:
+            print("ERROR: Channels.slots must be positive", file=sys.stderr)
+            result = False
+        for key in ("file_name", "archived"):
+            if not Config.settings["Channels"][key]:
+                print(f"ERROR: Channels.{key} missing", file=sys.stderr)
+                result = False
+        if not Config.settings["Paths"]["output"]:
+            print("ERROR: Paths.output missing", file=sys.stderr)
+            result = False
+        return result
 
     @staticmethod
     def print():

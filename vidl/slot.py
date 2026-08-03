@@ -51,7 +51,7 @@ class Slot:
             channel = self.__queue.get()
             if channel is not None:
                 with Slot.processor_lock:
-                    processor = self.__setup()
+                    processor = self.__setup(channel)
                 channel.set_halt_event(self.__halt_event)
                 try:
                     channel.download(self.__index, processor, self.__view_queue)
@@ -68,7 +68,7 @@ class Slot:
                     self.__channel = None
                     self.__ready = True
 
-    def __setup(self):
+    def __setup(self, channel):
         hook = Hook(self.__view_queue, self.__halt_event, self.__index)
         settings = deepcopy(Config.ydl_settings)
         if cookie_browser := Config.settings["General"]["cookie_browser"]:
@@ -77,7 +77,9 @@ class Slot:
         settings["paths"]["home"] = Config.settings["Paths"]["output"]
         settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]
         settings["download_archive"] = Config.settings["Channels"]["archived"]
-        settings["logger"] = Logger(self.__view_queue, self.__index)
+        settings["logger"] = Logger(
+            self.__view_queue, self.__index, channel.report_error
+        )
         settings["progress_hooks"] = [hook.common]
         settings["postprocessor_hooks"] = [hook.common]
 

@@ -1,14 +1,18 @@
+import csv
+import os
+import tempfile
 from datetime import datetime
+from threading import RLock
 from time import time
 
-from vidl.config import Config
-
+from .config import Config
 from .item import Item
 from .message import ItemMessage, Message, Msg, PlaylistCountMessage, SleepMessage
 from .util import Util
 
 
 class Channel:
+    __lock = RLock()
     __header_columns = [
         "#",
         "URL",
@@ -22,31 +26,32 @@ class Channel:
     @staticmethod
     def load_channels(file_name):
         channels = []
-        with open(file_name, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line or not line.startswith("#"):
-                    if line.count(";") > 0:
-                        parameters = line.split(";")
-                        if len(parameters) == Channel.header_len:
-                            channels.append(Channel(*parameters, sub_level=0))
-                    else:
-                        channels.append(Channel(line, None, None, None, None))
+        with open(file_name, newline="", encoding="utf-8") as f:
+            for row in csv.reader(f, delimiter=";"):
+                if row or row[0].lstrip().startswith("#"):
+                    cells = [cell.strip() or None for cell in row]
+                    if len(cells) == Channel.header_len:
+                        channels.append(Channel(*cells, sub_level=0))
+                    elif len(cells) > 0:
+                        channels.append(Channel(cells[0], None, None, None, None))
         return channels
 
     @staticmethod
     def save_channels(channels, file_name):
-        write_buffer = Channel.header
-        for channel in channels:
-            write_buffer += channel.write()
-        if write_buffer != Channel.header:
-            try:
-                with open(file_name, "w", encoding="utf-8") as f:
-                    f.write(write_buffer)
-            except FileNotFoundError as e:
-                return e
-        else:
-            return "Incorrect channel specification at write"
+        directory = os.path.dirname(os.path.abspath(file_name)) or "."
+        rows = [channel.__row() for channel in channels]
+        try:
+            fd, temp = tempfile.mkstemp(dir=directory, prefix=".channels-")
+            with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+                writer.writerow(Channel.__header_columns)
+                writer.writerows(rows)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp, file_name)
+        except OSError as e:
+            return e
+        return None
 
     def __init__(
         self, name, url, last_dl_dte, last_at_dte, last_error, sub_level=0
@@ -67,6 +72,16 @@ class Channel:
         self.__epoch_cutoff = None
         self.__halt_event = None
 
+    def __row(self):
+        with Channel.__lock:
+            return [
+                self.__name or "",
+                self.__url or "",
+                self.__last_download_date or 0,
+                self.__last_attempt_date or 0,
+                self.__last_error or "",
+            ]
+
     def get_last_date(self):
         ret = datetime.fromtimestamp(
             self.__last_download_date or self.__last_attempt_date or 0
@@ -86,19 +101,6 @@ class Channel:
 
     def set_halt_event(self, halt_event):
         self.__halt_event = halt_event
-
-    def write(self):
-        ret = (
-            f"{self.__name};"
-            + f"{self.__url};"
-            + f"{self.__last_download_date};"
-            + f"{self.__last_attempt_date};"
-            + f"{self.__last_error}"
-            + "\n"
-        )
-        if len(ret.split(";")) != Channel.header_len:
-            return ""
-        return ret
 
     def set_active(self):
         self.__reset_epoch_cutoff()
@@ -218,18 +220,25 @@ class Channel:
             return False
         return True
 
+    def report_error(self, message):
+        self.__set_error(message)
+
     def __download(self, processor):
         if item := self.__item:
             return processor.download([item.original_url or item.webpage_url]) == 0
 
     def __set_attempt_date(self):
-        self.__last_attempt_date = int(time())
+        with Channel.__lock:
+            self.__last_attempt_date = int(time())
 
     def __set_download_date(self):
-        self.__last_download_date = int(time())
+        with Channel.__lock:
+            self.__last_download_date = int(time())
 
     def __reset_epoch_cutoff(self):
-        self.__epoch_cutoff = None
+        with Channel.__lock:
+            self.__epoch_cutoff = None
 
     def __set_error(self, message):
-        self.__last_error = message
+        with Channel.__lock:
+            self.__last_error = message

@@ -32,6 +32,9 @@ class Terminal:
         self.__width, self.__height = size()
         return self.__height, self.__width
 
+    def clear(self):
+        print(ANSI.ClearScreen)
+
     def print(self, string, row, col):
         if not (1 <= row <= self.__height and 1 <= col <= self.__width):
             return

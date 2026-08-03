@@ -550,7 +550,7 @@ class View:
                 if body.provider == "sub_channel":
                     self.__slots[body.index].set_top("", "")
                 self.__slots[body.index].set_status_message(
-                    "Sleeping", Util.get_time(int(time()) + body.time_offset)
+                    "Sleeping", f"ETA {Util.get_time(int(time()) + body.time_offset)}"
                 )
                 self.__slots[body.index].set_status(View.Status.SLEEPING)
 

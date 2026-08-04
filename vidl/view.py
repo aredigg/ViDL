@@ -4,6 +4,8 @@ from queue import Empty, Queue
 from threading import Event, Thread
 from time import time
 
+from vidl.config import Config
+
 from .ansi import ANSI
 from .message import (
     ErrorMessage,
@@ -30,6 +32,8 @@ class View:
     HEAD_SIZE = 5
     FULL_INTERVAL_COUNT = 4
     LOOP_WAIT = 1 / FULL_INTERVAL_COUNT
+    NF_PREFIX = ""
+    NF_SUFFIX = ""
 
     class Status(Enum):
         INACTIVE = 0
@@ -77,6 +81,7 @@ class View:
             self.__status_message = None
             self.__temp_filepath = None
             self.__last_id = None
+            self.__nerd_fonts = ("", "")
 
         def reset(self):
             self.__item_id = ""
@@ -114,11 +119,17 @@ class View:
         def get_position(self):
             return self.__pos
 
+        def reset_position(self):
+            self.__pos = None
+
         def is_position(self, row, column):
             return (row, column) == self.__pos
 
         def set_size(self, slot_size):
             self.__size = slot_size
+
+        def set_nerd_fonts(self, config):
+            self.__nerd_fonts = config
 
         def set_status(self, status):
             self.__status = status
@@ -222,14 +233,14 @@ class View:
             if ANSI.len(self.__top_name) < w - 12:
                 title = " │ " + f"{self.__top_name} {self.__top_name_count}"
             header = (
-                ""
+                self.__nerd_fonts[0]
                 + ANSI.Inverse
                 + " "
                 + f"{str(self.__index + 1):>2.2}"
                 + title
                 + " "
                 + ANSI.InverseReset
-                + ""
+                + self.__nerd_fonts[1]
             )
             terminal.print(
                 "╭" + ("─" * 2) + header + ("─" * (w - 4 - ANSI.len(header))) + "╮",
@@ -312,7 +323,7 @@ class View:
                     line = line + " " * (w - 8 - line_len)
                     terminal.print(line, r + 4, c + 4)
                 if self.__item_title != self.__item_id:
-                    line = f"[{self.__item_id}]"
+                    line = f" [{self.__item_id}]"
                     line_len = ANSI.len(line)
                     if line_len < w - 10:
                         terminal.print(line, r + 4, c + (w - 4 - line_len))
@@ -507,12 +518,17 @@ class View:
         self.__term_header(terminal=terminal)
         for slot in self.__slots.values():
             slot.set_size(self.__slot_size)
+            slot.reset_position()
+        for slot in self.__slots.values():
+            self.__assign_position(slot)
 
     def __create_slot(self, body):
         if body.provider == "slot":
             slot = View.Slot(body.index)
             self.__assign_position(slot)
             self.__slots[body.index] = slot
+            if Config.settings["General"]["nerd_fonts"]:
+                slot.set_nerd_fonts((View.NF_PREFIX, View.NF_SUFFIX))
 
     def __assign_position(self, slot):
         for row in range(self.__rows):

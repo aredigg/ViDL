@@ -23,7 +23,7 @@ class Util:
             else:
                 hr += 1
                 mn = 0
-        return f"{hr:02}:{mn:02} "
+        return f"{hr:02}:{mn:02}′"
 
     @staticmethod
     def get_date(epoch=None):

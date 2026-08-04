@@ -28,7 +28,7 @@ class Channel:
         channels = []
         with open(file_name, newline="", encoding="utf-8") as f:
             for row in csv.reader(f, delimiter=";"):
-                if row or row[0].lstrip().startswith("#"):
+                if row and not row[0].lstrip().startswith("#"):
                     cells = [cell.strip() or None for cell in row]
                     if len(cells) == Channel.header_len:
                         channels.append(Channel(*cells, sub_level=0))
@@ -209,8 +209,11 @@ class Channel:
                                 ),
                             )
                         )
-                        if self.__halt_event is not None:
-                            self.__halt_event.wait(sleep_time)
+                        for _ in range(sleep_time >> 3):
+                            if self.__halt_event is not None and self.__halt_event.wait(
+                                8
+                            ):
+                                return ret
                     return ret
                 else:
                     self.__set_error("No formats or outside cutoff")

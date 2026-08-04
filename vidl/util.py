@@ -14,7 +14,7 @@ class Util:
         sc = int(seconds % 60)
         if include_seconds:
             if two_parts and hr == 0:
-                return f"{mn:02}:{sc:02}"
+                return f"{mn:02}′{sc:02}″"
             elif not two_parts:
                 return f"{hr:02}:{mn:02}:{sc:02}"
         if sc > 0:
@@ -23,7 +23,7 @@ class Util:
             else:
                 hr += 1
                 mn = 0
-        return f"{hr:02}:{mn:02}"
+        return f"{hr:02}:{mn:02} "
 
     @staticmethod
     def get_date(epoch=None):

@@ -17,6 +17,9 @@ from .message import (
 class Logger:
     BRACKET_PREFIX = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
     MESSAGE_SLEEP = re.compile(r"Sleeping\s+(\d+(?:\.\d+)?)\s+seconds\s+\.\.\.")
+    MESSAGE_DOWNLOAD_PAGE = re.compile(
+        r"([A-Za-z0-9_-]+)\s+page\s+(\d+): Downloading API JSON"
+    )
 
     def __init__(self, view_queue, slot_index, report_error) -> None:
         self.__view_queue = view_queue
@@ -106,6 +109,7 @@ class Logger:
                 )
             )
             return
+
         if match := self.__parse_prefix("Destination: ", message):
             self.__view_queue.put(
                 Message(
@@ -118,6 +122,7 @@ class Logger:
                 )
             )
             return
+
         if match := self.__parse_suffix(
             ": has already been recorded in the archive", message
         ):
@@ -161,6 +166,22 @@ class Logger:
                 )
             )
             return
+
+        match = Logger.MESSAGE_DOWNLOAD_PAGE.fullmatch(message)
+        if match is not None:
+            self.__view_queue.put(
+                Message(
+                    kind=Msg.INFO,
+                    body=InfoMessage(
+                        index=self.__slot_index,
+                        provider=provider,
+                        target=match.group(1),
+                        message="Metadata",
+                    ),
+                )
+            )
+            return
+
         match = Logger.MESSAGE_SLEEP.fullmatch(message)
         if match is not None:
             try:

@@ -32,6 +32,7 @@ class Debug:
         if Debug.inactive is not None:
             Debug.inactive.set()
         if Debug.thread is not None:
+            Debug.print("=== Inactive ===")
             Debug.thread.join()
 
     @staticmethod

@@ -37,8 +37,9 @@ class View:
         SLEEPING = 2
         DOWNLOADING = 3
         PROCESSING = 4
-        WARNING = 5
-        ERROR = 6
+        PROCESSINGWAIT = 5
+        WARNING = 6
+        ERROR = 7
 
     class Slot:
         def __init__(self, index) -> None:
@@ -254,7 +255,7 @@ class View:
                         - 19
                     )
                     meter = self.__progress_meter(length, self.__progress_percent, "━")
-                    line = line + " / " + remaining_time + "  " + meter + "  " + eta
+                    line = line + "/ " + remaining_time + " " + meter + "  " + eta
                     terminal.print(line, r + 2, c + 6)
                 elif self.__progress_file_size:
                     size = int(self.__progress_file_size) >> 20
@@ -369,31 +370,21 @@ class View:
         def __status_icon(self):
             match self.__status:
                 case View.Status.INACTIVE:
-                    return (
-                        ANSI.Dim
-                        + ANSI.Color.Cerise
-                        + "○"
-                        + ANSI.Color.DefaultFg
-                        + ANSI.DimReset
-                    )
+                    return ANSI.Color.Black + "●" + ANSI.Color.DefaultFg
                 case View.Status.WAITING:
-                    return (
-                        ANSI.Blink
-                        + ANSI.Color.Cerise
-                        + "●"
-                        + ANSI.Color.DefaultFg
-                        + ANSI.BlinkReset
-                    )
-                case View.Status.SLEEPING:
                     return ANSI.Color.Cerise + "○" + ANSI.Color.DefaultFg
+                case View.Status.SLEEPING:
+                    return ANSI.Dim + "○" + ANSI.DimReset
                 case View.Status.DOWNLOADING:
                     return ANSI.Color.Cerise + "●" + ANSI.Color.DefaultFg
                 case View.Status.PROCESSING:
                     return ANSI.Color.PineGreen + "●" + ANSI.Color.DefaultFg
+                case View.Status.PROCESSINGWAIT:
+                    return ANSI.Color.PineGreen + "○" + ANSI.Color.DefaultFg
                 case View.Status.WARNING:
-                    return ANSI.Color.BurntSienna + "○" + ANSI.Color.DefaultFg
+                    return ANSI.Color.BurntSienna + "✖" + ANSI.Color.DefaultFg
                 case View.Status.ERROR:
-                    return ANSI.Color.Cerise + "○" + ANSI.Color.DefaultFg
+                    return ANSI.Color.Cerise + "✖" + ANSI.Color.DefaultFg
 
         def __progress_meter(self, length, percent, kind="-"):
             if length < 1:
@@ -549,6 +540,9 @@ class View:
                     "Sleeping", f"ETA {Util.get_time(int(time()) + body.time_offset)}"
                 )
                 self.__slots[body.index].set_status(View.Status.SLEEPING)
+            else:
+                self.__slots[body.index].set_timer(body.time_offset)
+                self.__slots[body.index].set_status(View.Status.PROCESSINGWAIT)
 
     def __update_item(self, body):
         if body.index in self.__slots:
@@ -635,10 +629,7 @@ class View:
 
     def __update_info_message(self, body):
         if body.index in self.__slots:
-            if body.message == "Downloading":
-                self.__slots[body.index].set_status_message(body.provider, body.target)
-                self.__slots[body.index].set_status(View.Status.PROCESSING)
-            if body.message == "Metadata":
+            if body.message == "Downloading" or body.message == "Metadata":
                 self.__slots[body.index].set_status_message(body.provider, body.target)
                 self.__slots[body.index].set_status(View.Status.PROCESSING)
 

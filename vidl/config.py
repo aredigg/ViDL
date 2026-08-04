@@ -21,6 +21,7 @@ class Config:
         },
         "General": {
             "cookie_browser": "safari",
+            "nerd_fonts": True,
         },
         "Download": {
             "allow_vertical": False,

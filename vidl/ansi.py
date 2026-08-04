@@ -40,6 +40,7 @@ class ANSI:
         DefaultFg = "\033[39m"
         DefaultBg = "\033[49m"
 
+        Black = "\x1b[38;2;0;0;0m"
         Cerise = "\x1b[38;2;217;56;106m"
         BurntSienna = "\x1b[38;2;227;114;86m"
         PineGreen = "\x1b[38;2;32;109;75m"

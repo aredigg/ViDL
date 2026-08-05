@@ -209,9 +209,10 @@ class Channel:
                                 ),
                             )
                         )
-                        for _ in range(sleep_time >> 3):
+                        sleep_until = int(time()) + sleep_time
+                        while int(time()) < sleep_until:
                             if self.__halt_event is not None and self.__halt_event.wait(
-                                8
+                                1
                             ):
                                 return ret
                     return ret

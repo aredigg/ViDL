@@ -20,6 +20,9 @@ class Logger:
     MESSAGE_DOWNLOAD_PAGE = re.compile(
         r"([A-Za-z0-9_-]+)\s+page\s+(\d+): Downloading API JSON"
     )
+    MESSAGE_RETRY_ERROR = re.compile(
+        r"Got error: (\d+) bytes read, (\d+) more expected\. Retrying \((\d+)/(\d+)\)\.\.\."
+    )
 
     def __init__(self, view_queue, slot_index, report_error) -> None:
         self.__view_queue = view_queue
@@ -176,6 +179,21 @@ class Logger:
                         index=self.__slot_index,
                         provider=provider,
                         target=match.group(1),
+                        message="Metadata",
+                    ),
+                )
+            )
+            return
+
+        match = Logger.MESSAGE_RETRY_ERROR.fullmatch(message)
+        if match is not None:
+            self.__view_queue.put(
+                Message(
+                    kind=Msg.INFO,
+                    body=ErrorMessage(
+                        index=self.__slot_index,
+                        provider=provider,
+                        target=f"Retry {int(match.group(3))}/{int(match.group(4))}",
                         message="Metadata",
                     ),
                 )

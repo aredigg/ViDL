@@ -4,9 +4,8 @@ from queue import Empty, Queue
 from threading import Event, Thread
 from time import time
 
-from vidl.config import Config
-
 from .ansi import ANSI
+from .config import Config
 from .message import (
     ErrorMessage,
     FilePathMessage,

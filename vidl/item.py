@@ -43,34 +43,34 @@ class Item:
     @staticmethod
     def get_entity(info, name, index) -> Entity:
         stream = "VIDEO"
-        if info.get("is_live", False):
+        if info.get("is_live") or False:
             stream = "LIVE"
-        elif info.get("live_status", "") in ("is_upcoming", "was_live", "post_live"):
+        elif info.get("live_status") in ("is_upcoming", "was_live", "post_live"):
             stream = "STREAM"
         return Item.Entity(
-            id=info.get("id", ""),
+            id=info.get("id") or "",
             index=index,
-            playlist_index=info.get("playlist_index", 0),
-            date=info.get("timestamp") or info.get("epoch", 0),
-            title=info.get("title", ""),
-            availability=info.get("availability", ""),
-            age_limit=info.get("age_limit", 0),
-            stream=f"{stream:<6.6}",
+            playlist_index=info.get("playlist_index") or 0,
+            date=info.get("timestamp") or info.get("epoch") or 0,
+            title=info.get("title") or "",
+            availability=info.get("availability") or "",
+            age_limit=info.get("age_limit") or 0,
+            stream=stream,
             top_name=name,
         )
 
     @staticmethod
     def get_progress(data) -> Progress:
-        elapsed = data.get("elapsed", 0.0)
-        downloaded_bytes = data.get("downloaded_bytes", 0)
-        total_bytes = data.get("total_bytes") or data.get("total_bytes_estimate", 0)
+        elapsed = data.get("elapsed") or 0.0
+        downloaded_bytes = data.get("downloaded_bytes") or 0
+        total_bytes = data.get("total_bytes") or data.get("total_bytes_estimate") or 0
         bitrate = 0
         if elapsed and downloaded_bytes:
             bitrate = int((downloaded_bytes << 3) / elapsed) >> 10
         remaining_bits = int(total_bytes - downloaded_bytes) >> 7
         remaining = int(remaining_bits / bitrate) if bitrate > 0 else 0
         extension = "----"
-        parts = data.get("filename", "").upper().split(".")
+        parts = (data.get("filename") or "").upper().split(".")
         if len(parts) > 0:
             extension = parts[-1]
 
@@ -79,33 +79,35 @@ class Item:
             time_total=elapsed + remaining,
             size_current=downloaded_bytes,
             size_total=total_bytes,
-            fragment_current=data.get("fragment_index", 0),
-            fragment_total=data.get("fragment_count", 0),
+            fragment_current=data.get("fragment_index") or 0,
+            fragment_total=data.get("fragment_count") or 0,
             bitrate=bitrate,
-            eta=data.get("eta", 0),
-            percent=data.get("_percent", 0.0),
-            process=data.get("postprocessor", "Progress"),
-            status=data.get("status", ""),
-            extension=f"{extension:<4.4}",
+            eta=data.get("eta") or 0,
+            percent=data.get("_percent") or 0.0,
+            process=data.get("postprocessor") or "Progress",
+            status=data.get("status") or "",
+            extension=extension,
         )
 
     @staticmethod
     def get_media(info) -> Media:
-        width = info.get("width", 0)
-        height = info.get("height", 0)
+        width = info.get("width") or 0
+        height = info.get("height") or 0
         video_stat = audio_stat = subtitle_stat = ""
         if width and height:
-            video_stat = f"{str(width):>4.4}x{str(height):<4.4}@{str(int(info.get('fps', 0))):<3.3} {info.get('dynamic_range', 'SDR'):<6.6} {(info.get('vcodec', '----'))[:4].upper()}"
-        asr = info.get("asr", 0)
-        audio_channels = info.get("audio_channels", 0)
+            video_stat = f"{width}x{height}@{int(info.get('fps') or 0)} {info.get('dynamic_range') or 'SDR'} {(info.get('vcodec') or '----')[:4].upper()}"
+        asr = info.get("asr") or 0
+        audio_channels = info.get("audio_channels") or 0
         if asr and audio_channels:
-            audio_stat = f"{str(asr):>6.6}x{str(audio_channels):<2.2} {(info.get('acodec', '----'))[:4].upper()}"
+            audio_stat = (
+                f"{asr}x{audio_channels} {(info.get('acodec') or '----')[:4].upper()}"
+            )
         requested_subtitles = info.get("requested_subtitles") or {}
-        subtitles = [lang for lang in requested_subtitles.keys()]
+        subtitles = [lang.split("-")[0] for lang in requested_subtitles.keys()]
         subtitle_stat = "/".join(subtitles)
         return Item.Media(
-            length=info.get("duration", 0),
-            extension=info.get("ext", "---").upper(),
+            length=info.get("duration") or 0,
+            extension=(info.get("ext") or "---").upper(),
             video_stat=video_stat,
             audio_stat=audio_stat,
             subtitle_stat=subtitle_stat,
@@ -113,20 +115,20 @@ class Item:
 
     @staticmethod
     def no_vertical(info):
-        width = info.get("width", 0)
-        height = info.get("height", 0)
+        width = info.get("width") or 0
+        height = info.get("height") or 0
         return not Config.settings["Download"]["allow_vertical"] and height > width
 
     @staticmethod
     def high_resolution(info):
-        height = info.get("height", 0)
+        height = info.get("height") or 0
         if minimum_resolution := Config.settings["Download"]["minimum_resolution"]:
             return height == 0 or height >= minimum_resolution
         return True
 
     @staticmethod
     def within_cutoff(info, channel):
-        timestamp = info.get("timestamp", 0)
+        timestamp = info.get("timestamp") or 0
         if cutoff := Config.settings["Download"]["playlist_cutoff"]:
             return not timestamp or (
                 timestamp >= channel.set_epoch_cutoff(cutoff * 86_400)
@@ -135,11 +137,29 @@ class Item:
 
     @staticmethod
     def outside_deferred(info, format):
-        height = format.get("height", 0)
-        timestamp = info.get("timestamp", 0)
+        height = format.get("height") or 0
+        timestamp = info.get("timestamp") or 0
         if defer := Config.settings["Download"]["resolution_defer"]:
             return timestamp < (int(time()) - defer * 86_400) or height > 2000
         return True
+
+    @staticmethod
+    def requested_format(info):
+        requested = info.get("requested_formats") or info.get("requested_downloads")
+        if requested:
+            video = next(
+                (f for f in requested if f.get("vcodec") or "none" != "none"),
+                requested[0],
+            )
+            audio = next(
+                (f for f in requested if f.get("acodec") or "none" != "none"), {}
+            )
+            merged = dict(video)
+            for key in ("asr", "audio_channels", "acodec"):
+                if not merged.get(key) or (merged.get(key) or "none") == "none":
+                    merged[key] = audio.get(key)
+            return merged
+        return Item.enumerate_best_format(info)
 
     @staticmethod
     def enumerate_best_format(info, extension="mp4"):

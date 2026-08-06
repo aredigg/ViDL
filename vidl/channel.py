@@ -5,9 +5,18 @@ from datetime import datetime
 from threading import RLock
 from time import time
 
+from yt_dlp.YoutubeDL import YoutubeDL
+
 from .config import Config
 from .item import Item
-from .message import CountMessage, EntityMessage, Message, SleepMessage
+from .message import (
+    CountMessage,
+    EntityMessage,
+    ErrorMessage,
+    MediaMessage,
+    Message,
+    SleepMessage,
+)
 
 
 class Channel:
@@ -107,9 +116,12 @@ class Channel:
     def active(self):
         return self.__active
 
+    def report_error(self, message):
+        self.__set_error(message)
+
     # ----- Inside slot thread
 
-    def download(self, slot, processor, queue, playlist_index=1):
+    def download(self, slot, processor: YoutubeDL, queue, playlist_index=1):
         if self.__slot_index is not None:
             return False
 
@@ -126,7 +138,7 @@ class Channel:
 
     def __extract(self, processor, queue, playlist_index):
         if self.__halt_event is not None and self.__halt_event.is_set():
-            self.__set_error("Got halted")
+            self.__report_error(queue, "Got halted")
             return False
         if self.__url is None or self.__url == "None":
             self.__url = self.__name
@@ -150,9 +162,18 @@ class Channel:
                         ),
                     )
                 )
+                queue.put(
+                    MediaMessage(
+                        index=self.__slot_index,
+                        provider=Message.Provider.CHANNEL,
+                        media=Item.get_media(
+                            info=Item.requested_format(info),
+                        ),
+                    )
+                )
             if info.get("_type") == "playlist":
                 sub_channels = []
-                if entries := list(info.get("entries", [])):
+                if entries := list(info.get("entries") or []):
                     if self.__slot_index is not None:
                         queue.put(
                             CountMessage(
@@ -183,22 +204,21 @@ class Channel:
                             self.__slot_index, processor, queue, playlist_index
                         )
                         if error := channel.get_last_error():
-                            self.__set_error(f"({error})")
+                            self.__report_error(queue, f"({error})")
             else:
                 format = Item.enumerate_best_format(info)
                 if Item.no_vertical(format):
-                    self.__set_error("Vertical video")
+                    self.__report_error(queue, "Vertical video")
                     return False
                 if not Item.high_resolution(format):
-                    self.__set_error("Low resolution")
+                    self.__report_error(queue, "Low resolution")
                     return False
                 if not Item.within_cutoff(info, self):
-                    self.__set_error("Outside cutoff")
+                    self.__report_error(queue, "Outside cutoff")
                     return False
                 if not Item.outside_deferred(info, format):
-                    self.__set_error("Defer low resolution")
+                    self.__report_error(queue, "Defer low resolution")
                     return False
-
                 process_time = int(time())
                 ret = self.__download(processor, info)
                 cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
@@ -217,18 +237,26 @@ class Channel:
                             return ret
                 return ret
         else:
-            self.__set_error("Nothing to process")
+            # if not self.__last_error:
+            #    self.__report_error(queue, "Nothing to process")
             return False
         return True
 
-    def report_error(self, message):
+    def __report_error(self, queue, message):
+        if self.__slot_index is not None:
+            queue.put(
+                ErrorMessage(
+                    index=self.__slot_index,
+                    provider=Message.Provider.CHANNEL,
+                    target=self.__name,
+                    message=message,
+                )
+            )
         self.__set_error(message)
 
     def __download(self, processor, info):
         return (
-            processor.download(
-                [info.get("original_url", "") or info.get("webpage_url", "")]
-            )
+            processor.download([info.get("original_url") or info.get("webpage_url")])
             == 0
         )
 

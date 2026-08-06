@@ -7,7 +7,7 @@ from .debug import Debug
 
 
 def main(args) -> int:
-    status = 0
+    status, error = 0, None
     if len(args) > 0:
         Config.initialize(args[0])
     else:
@@ -18,13 +18,20 @@ def main(args) -> int:
     Config.save()
     if Config.settings["Debug"]["active"]:
         Debug.activate()
-    with tempfile.TemporaryDirectory() as t:
-        Config.settings["Paths"]["temporary"] = t
-        coord = Coordinator()
-        status = coord.run()
-        if coord.error() is not None:
-            print(f"ERROR: {coord.error()}", file=sys.stderr)
-    print("Done.")
+    try:
+        with tempfile.TemporaryDirectory() as t:
+            Config.settings["Paths"]["temporary"] = t
+            coord = Coordinator()
+            status = coord.run()
+            error = coord.error()
+    except Exception as e:
+        status, error = 4, e
+    if error is not None:
+        print(f"ERROR: {error}", file=sys.stderr)
+    elif status == 0:
+        print("Done.")
+    else:
+        print("ERROR: Unknown", file=sys.stderr)
     if Config.settings["Debug"]["active"]:
         Debug.deactivate()
     return status

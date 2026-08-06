@@ -55,7 +55,7 @@ class Debug:
     @staticmethod
     def __write(message):
         prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        message = ANSI.remove(message)
+        message = ANSI.remove(str(message))
         Debug.buffer += f"{prefix} UTC > {message}\n"
         if Debug.wrapper is not None and len(Debug.buffer) > Debug.BUFFER_SIZE:
             Debug.wrapper.write(Debug.buffer)

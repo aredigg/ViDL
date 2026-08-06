@@ -117,6 +117,10 @@ class View:
         line = "ViDL"
         if ANSI.len(line) < self.__size.cols - 10:
             terminal.print(line, 2, 10)
+        if self.__status.message:
+            line = f" --- {ANSI.Color.FashionBlue}{self.__status.message}{ANSI.Color.DefaultFg}"
+            if ANSI.len(line) < self.__size.cols - 10:
+                terminal.print(line, 3, 10)
 
     def __draw_border(self, terminal: Terminal) -> None:
         title = ""
@@ -255,71 +259,43 @@ class View:
                 self.__size.origin_col + 4,
             )
         else:
-            terminal.print(
-                " " * (self.__size.cols - 2),
-                self.__size.origin_row + 4,
-                self.__size.origin_col + 1,
-            )
-            terminal.print(
-                " " * (self.__size.cols - 2),
-                self.__size.origin_row + 5,
-                self.__size.origin_col + 1,
-            )
+            self.__print(terminal, 4)
+            self.__print(terminal, 5)
 
     def __media_line(self, terminal: Terminal):
-        max_len = self.__size.cols - 30
+        OFFSET = 18
         if self.__item_media is not None:
-            line = f"│ {Util.format_seconds(self.__item_media.length, two_parts=False)} {self.__item_media.extension}"
+            line = (
+                " " * OFFSET
+                + f"│ {Util.format_seconds(self.__item_media.length, two_parts=False)} {self.__item_media.extension} "
+            )
             if self.__item_progress is not None and self.__item_entity is not None:
-                line += (
-                    f" {self.__item_progress.extension.upper():<4.4}"
-                    + f" {self.__item_entity.stream}"
-                    + f" ({self.__item_entity.age_limit})"
-                )
+                line += f"{self.__item_entity.stream} ({self.__item_entity.age_limit}) "
                 if self.__item_progress.size_total:
                     size = int(self.__item_progress.size_total) >> 20
-                    line = line + " " + f"{size:>6} MB"
-            if ANSI.len(line) < max_len:
-                terminal.print(
-                    f"{line:<{max_len}.{max_len}}",
-                    self.__size.origin_row + 6,
-                    self.__size.origin_col + 22,
-                )
-            line = f"│ {self.__item_media.video_stat}"
-            if ANSI.len(line) < max_len:
-                terminal.print(
-                    f"{line:<{max_len}.{max_len}}",
-                    self.__size.origin_row + 7,
-                    self.__size.origin_col + 22,
-                )
-            line = f"│ {self.__item_media.audio_stat}"
-            if ANSI.len(line) < max_len:
-                terminal.print(
-                    f"{line:<{max_len}.{max_len}}",
-                    self.__size.origin_row + 8,
-                    self.__size.origin_col + 22,
-                )
-            line = f"│ {self.__item_media.subtitle_stat}"
-            if ANSI.len(line) < max_len:
-                terminal.print(
-                    f"{line:<{max_len}.{max_len}}",
-                    self.__size.origin_row + 9,
-                    self.__size.origin_col + 22,
-                )
+                    line += f"{size:>6} MB"
+            self.__print(terminal, 6, line)
+            line = " " * OFFSET + f"│ {self.__item_media.video_stat}"
+            self.__print(terminal, 7, line)
+            line = " " * OFFSET + f"│ {self.__item_media.audio_stat}"
+            self.__print(terminal, 8, line)
+            line = " " * OFFSET + f"│ {self.__item_media.subtitle_stat}"
+            self.__print(terminal, 9, line)
         elif self.__item_entity is not None:
-            for rb in range(6, 10):
-                terminal.print(
-                    "│" + " " * (max_len - 1),
-                    self.__size.origin_row + rb,
-                    self.__size.origin_col + 22,
-                )
+            for row in range(6, 10):
+                line = " " * OFFSET + "│"
+                self.__print(terminal, row, line)
         else:
-            for rb in range(6, 10):
-                terminal.print(
-                    " " * max_len,
-                    self.__size.origin_row + rb,
-                    self.__size.origin_col + 22,
-                )
+            for row in range(6, 10):
+                self.__print(terminal, row)
+
+    def __print(self, terminal: Terminal, row: int, line: str = ""):
+        line = ANSI.trim(line, self.__size.cols - 8)
+        terminal.print(
+            line + " " * max(0, self.__size.cols - ANSI.len(line) - 8),
+            self.__size.origin_row + row,
+            self.__size.origin_col + 4,
+        )
 
     def __progress_meter(self, length, percent, kind="-") -> str:
         if length < 1:

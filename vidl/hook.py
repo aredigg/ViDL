@@ -25,7 +25,7 @@ class Hook:
                 Hook.State.MOVE.value: "Move",
                 Hook.State.NORMALIZE.value: "Normalize",
             }
-            return processes.get(state, state)
+            return processes.get(state) or state
 
     class Status(Enum):
         DOWNLOADING = "downloading"
@@ -52,7 +52,7 @@ class Hook:
             MediaMessage(
                 index=self.__slot_index,
                 provider=Message.Provider.HOOK,
-                media=Item.get_media(info=data.get("info_dict", {})),
+                media=Item.get_media(info=data.get("info_dict") or {}),
             )
         )
 

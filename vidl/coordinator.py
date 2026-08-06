@@ -1,18 +1,23 @@
+from queue import Empty
 from signal import SIGTERM, SIGWINCH, signal
 from time import sleep
 
 from .channel import Channel
 from .config import Config
+from .debug import Debug
 from .message import RedrawMessage
 from .slot import Slot
 from .view_controller import ViewController
 
 
 class Coordinator:
+    SAVE_INTERVAL = 30
+
     def __init__(self) -> None:
         self.__running = True
         self.__view = ViewController()
         self.__view_queue = self.__view.get_queue()
+        self.__input_queue = self.__view.get_queue(input_queue=True)
         self.__channels = []
         self.__slots = []
         self.__error = None
@@ -50,6 +55,7 @@ class Coordinator:
                 return 2
             else:
                 self.__save_channels()
+            save_counter = Coordinator.SAVE_INTERVAL
             while self.__running:
                 try:
                     channel = self.__next_channel()
@@ -59,6 +65,11 @@ class Coordinator:
                         slot.process(channel)
                     else:
                         sleep(1)
+                    save_counter -= 1
+                    if save_counter == 0:
+                        self.__save_channels()
+                        save_counter = Coordinator.SAVE_INTERVAL
+                    self.__poll_input()
                 except KeyboardInterrupt:
                     self.__running = False
         finally:
@@ -79,7 +90,16 @@ class Coordinator:
             default=None,
         )
 
+    def __poll_input(self):
+        try:
+            key = self.__input_queue.get_nowait()
+        except Empty:
+            return
+        if key in ("q", "Q", "\x03", "\x04"):
+            self.halt()
+
     def halt(self):
+        Debug.print(" === Shutdown requested === ")
         self.__running = False
 
     def redraw(self):

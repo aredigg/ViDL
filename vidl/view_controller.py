@@ -37,6 +37,7 @@ class ViewController:
         self.__views: dict[int, View] = {}
         self.__slots_ = set()
         self.__redraw_required = False
+        self.__input_queue = Queue()
         self.__queue = Queue()
         self.__halt_event = Event()
         self.__thread = Thread(
@@ -46,7 +47,7 @@ class ViewController:
         ViewController.index += 1
 
     def __run(self) -> None:
-        with Terminal() as terminal:
+        with Terminal(self.__input_queue) as terminal:
             self.__create_header()
             self.__redraw(terminal)
             self.__ready = True
@@ -260,6 +261,14 @@ class ViewController:
                         message=parts[1].strip(),
                     )
                 )
+            elif message.provider == Message.Provider.CHANNEL:
+                view.set_status(
+                    status=View.Status(
+                        View.Status.State.ERROR,
+                        provider=f"{message.target}",
+                        message=message.message,
+                    )
+                )
             elif isinstance(message.provider, str):
                 view.set_status(
                     status=View.Status(
@@ -277,10 +286,17 @@ class ViewController:
                     )
                 )
 
-    def get_queue(self) -> Queue:
+    def get_queue(self, input_queue=False) -> Queue:
+        if input_queue:
+            return self.__input_queue
         return self.__queue
 
     def halt(self):
+        self.__views[View.HEADER].set_status(
+            View.Status(
+                state=View.Status.State.INACTIVE, message="Shutdown in progress"
+            )
+        )
         self.__ready = False
         self.__queue.put(HaltMessage())
         self.__halt_event.set()

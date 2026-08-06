@@ -1,7 +1,6 @@
 from copy import deepcopy
 from queue import Queue
 from threading import Event, Lock, Thread
-from time import sleep
 from typing import TYPE_CHECKING, cast
 
 from yt_dlp import YoutubeDL
@@ -9,7 +8,7 @@ from yt_dlp import YoutubeDL
 from .config import Config
 from .hook import DownloadCancelled, Hook
 from .logger import Logger
-from .message import ErrorMessage, InitMessage, Message
+from .message import InitMessage, Message
 
 if TYPE_CHECKING:
     from yt_dlp import _Params
@@ -52,18 +51,8 @@ class Slot:
                         processor = self.__setup(channel)
                     channel.set_halt_event(self.__halt_event)
                     channel.download(self.__index, processor, self.__view_queue)
-                    sleep(3)
                 except DownloadCancelled:
                     ...
-                except Exception as e:
-                    self.__view_queue.put(
-                        ErrorMessage(
-                            index=self.__index,
-                            provider=Message.Provider.SLOT,
-                            target="",
-                            message=str(e),
-                        )
-                    )
                 finally:
                     self.__channel = None
                     self.__ready = True
@@ -88,8 +77,8 @@ class Slot:
 
     def halt(self):
         self.__ready = False
-        self.__queue.put(None)
         self.__halt_event.set()
+        self.__queue.put(None)
 
     def join(self):
         self.__thread.join()

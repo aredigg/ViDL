@@ -26,18 +26,18 @@ class ANSI:
 
     class Color:
         @staticmethod
-        def __get_rgb(hex):
+        def __get_rgb(hex: str) -> tuple[int, int, int]:
             hex = hex.removeprefix("#")
             assert len(hex) == 6
             return int(hex[0:2], 16), int(hex[2:4], 16), int(hex[4:6], 16)
 
         @staticmethod
-        def fg(hex):
+        def fg(hex: str) -> str:
             r, g, b = ANSI.Color.__get_rgb(hex)
             return f"\x1b[38;2;{r};{g};{b}m"
 
         @staticmethod
-        def bg(hex):
+        def bg(hex: str) -> str:
             r, g, b = ANSI.Color.__get_rgb(hex)
             return f"\x1b[48;2;{r};{g};{b}m"
 
@@ -52,42 +52,37 @@ class ANSI:
         NeonChartreuse = "\x1b[38;2;217;255;47m"  # D9FF2F
 
     @staticmethod
-    def remove(string):
+    def remove(string: str) -> str:
         return ANSI.SEQUENCE_MATCH.sub("", string)
 
     @staticmethod
-    def title_bar(string):
+    def title_bar(string: str) -> str:
         return f"\x1b]2;{string}\x1b\\"
 
     @staticmethod
-    def notify(string):
+    def notify(string: str) -> str:
         return f"\x1b]9;{string}\x1b\\"
 
     @staticmethod
-    def print(string="", row=1, col=1):
+    def print(string: str = "", row: int = 1, col: int = 1) -> str:
         return f"\x1b[{row};{col}H{string}"
 
     @staticmethod
-    def len(string):
+    def len(string: str) -> int:
         return Unicode.len(ANSI.remove(string))
 
     @staticmethod
-    def trim(string, length):
-        pos = 0
-        escapes = []
+    def trim(string: str, length: int) -> str:
+        out, out_length, pos = [], 0, 0
         while pos < len(string):
-            match = ANSI.SEQUENCE_MATCH.match(string, pos)
-            if match:
-                escapes.append((match.group(), pos))
+            if match := ANSI.SEQUENCE_MATCH.match(string, pos):
+                out.append(match.group())
                 pos = match.end()
             else:
+                width = Unicode.len(string[pos])
+                if out_length + width > length:
+                    break
+                out.append(string[pos])
+                out_length += width
                 pos += 1
-        string = ANSI.SEQUENCE_MATCH.sub("", string)
-        while ANSI.len(string) > length:
-            string = string[:-1]
-        for escape, pos in escapes:
-            if pos < len(string):
-                string = string[:pos] + escape + string[pos:]
-            else:
-                string += escape
-        return string
+        return "".join(out)

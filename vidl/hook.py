@@ -1,5 +1,7 @@
 from enum import Enum
 
+from vidl.debug import Debug
+
 from .item import Item
 from .message import MediaMessage, Message, ProgressMessage
 
@@ -18,12 +20,12 @@ class Hook:
         @staticmethod
         def process(state: str) -> str:
             processes = {
-                Hook.State.PROGRESS: "Progress",
-                Hook.State.MERGE: "Merge",
-                Hook.State.MOVE: "Move",
-                Hook.State.NORMALIZE: "Normalize",
+                Hook.State.PROGRESS.value: "Progress",
+                Hook.State.MERGE.value: "Merge",
+                Hook.State.MOVE.value: "Move",
+                Hook.State.NORMALIZE.value: "Normalize",
             }
-            return processes.get(Hook.State(state), state)
+            return processes.get(state, state)
 
     class Status(Enum):
         DOWNLOADING = "downloading"
@@ -36,6 +38,9 @@ class Hook:
         self.__slot_index = slot_index
 
     def common(self, data):
+        Debug.print(
+            f"> HOOK {self.__slot_index} --> {Item.get_progress(data=data).process}: {Item.get_progress(data=data).status}"
+        )
         self.__view_queue.put(
             ProgressMessage(
                 index=self.__slot_index,

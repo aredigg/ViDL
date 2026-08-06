@@ -45,4 +45,7 @@ class Terminal:
         print(ANSI.print(string, row, col), end="")
 
     def flush(self):
-        print(ANSI.print())
+        sys.stdout.flush()
+
+
+#        print(ANSI.print())

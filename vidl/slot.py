@@ -47,10 +47,10 @@ class Slot:
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
             if channel is not None:
-                with Slot.processor_lock:
-                    processor = self.__setup(channel)
-                channel.set_halt_event(self.__halt_event)
                 try:
+                    with Slot.processor_lock:
+                        processor = self.__setup(channel)
+                    channel.set_halt_event(self.__halt_event)
                     channel.download(self.__index, processor, self.__view_queue)
                     sleep(3)
                 except DownloadCancelled:
@@ -76,7 +76,8 @@ class Slot:
         settings["max_sleep_interval"] = Config.settings["Download"]["sleep_interval"]
         settings["paths"]["home"] = Config.settings["Paths"]["output"]
         settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]
-        settings["download_archive"] = Config.settings["Channels"]["archived"]
+        if archived := Config.settings["Channels"]["archived"]:
+            settings["download_archive"] = archived
         settings["logger"] = Logger(
             self.__view_queue, self.__index, channel.report_error
         )

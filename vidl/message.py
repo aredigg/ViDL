@@ -25,7 +25,7 @@ class RedrawMessage(Message): ...
 @dataclass
 class SlotMessage(Message):
     index: int
-    provider: Message.Provider | str
+    provider: Message.Provider
 
 
 @dataclass

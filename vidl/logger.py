@@ -21,6 +21,11 @@ class Logger:
     MESSAGE_RETRY_ERROR = re.compile(
         r"Got error: (\d+) bytes read, (\d+) more expected\. Retrying \((\d+)/(\d+)\)\.\.\."
     )
+    MESSAGE_MEMBER_LEVEL = re.compile(
+        r"This video is available to this channel's members on level: "
+        r"(.+?) \(or any higher level\)\. Join this channel to get access "
+        r"to members-only content and other exclusive perks\."
+    )
 
     def __init__(self, view_queue, slot_index, report_error) -> None:
         self.__view_queue = view_queue
@@ -66,7 +71,7 @@ class Logger:
             self.__view_queue.put(
                 ErrorMessage(
                     index=self.__slot_index,
-                    provider=provider,
+                    provider=Message.Provider.LOGGER,
                     target=target or "",
                     message=provider_message,
                 )
@@ -92,6 +97,12 @@ class Logger:
         return match.group(1), match.group(2)
 
     def __parse_to_view(self, provider, message):
+        provider_message = provider
+        if provider == "download":
+            provider = Message.Provider.DOWNLOAD
+        else:
+            provider = Message.Provider.LOGGER
+
         if match := self.__parse_prefix("Extracting URL: ", message):
             self.__view_queue.put(
                 UrlMessage(
@@ -131,7 +142,7 @@ class Logger:
                     index=self.__slot_index,
                     provider=provider,
                     target=match,
-                    message="Downloading",
+                    message=provider_message,
                 )
             )
             return
@@ -142,7 +153,21 @@ class Logger:
                     index=self.__slot_index,
                     provider=provider,
                     target=match,
-                    message="Metadata",
+                    message=provider_message,
+                )
+            )
+            return
+
+        if match := self.__parse_suffix(
+            ": Join this channel to get access to members-only content like this video, and other exclusive perks.",
+            message,
+        ):
+            self.__view_queue.put(
+                ErrorMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=match,
+                    message="Join channel",
                 )
             )
             return
@@ -154,7 +179,7 @@ class Logger:
                     index=self.__slot_index,
                     provider=provider,
                     target=match.group(1),
-                    message="Metadata",
+                    message=provider_message,
                 )
             )
             return
@@ -166,7 +191,19 @@ class Logger:
                     index=self.__slot_index,
                     provider=provider,
                     target=f"Retry {int(match.group(3))}/{int(match.group(4))}",
-                    message="Metadata",
+                    message=provider_message,
+                )
+            )
+            return
+
+        match = Logger.MESSAGE_MEMBER_LEVEL.fullmatch(message)
+        if match is not None:
+            self.__view_queue.put(
+                ErrorMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=match.group(1),
+                    message="Member level",
                 )
             )
             return

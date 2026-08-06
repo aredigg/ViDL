@@ -3,9 +3,8 @@ from queue import Empty, Queue
 from threading import Event, Thread
 from time import time
 
-from vidl.ansi import ANSI
-from vidl.hook import Hook
-
+from .ansi import ANSI
+from .hook import Hook
 from .message import (
     CountMessage,
     EntityMessage,
@@ -19,6 +18,7 @@ from .message import (
     ProgressMessage,
     RedrawMessage,
     SleepMessage,
+    UrlMessage,
     WarningMessage,
 )
 from .terminal import Terminal
@@ -60,24 +60,28 @@ class ViewController:
                         self.__dispatch_message(message)
                 except Empty:
                     ...
-            if self.__redraw_required:
-                self.__redraw(terminal)
-            if counter == 0:
-                title_bar = []
-                for view in self.__views.values():
-                    view.update(terminal)
-                    view.blink(terminal)
-                    title_bar.append(f"{view.get_head_index()}")
-                terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
-                terminal.flush()
-                counter = ViewController.UPDATES_PER_SECOND
-            elif counter == ViewController.BLINKER_INTERVAL:
-                for view in self.__views.values():
-                    view.blink(terminal)
-            else:
-                for view in self.__views.values():
-                    view.update_status(terminal)
+                if self.__redraw_required:
+                    self.__redraw(terminal)
                 counter -= 1
+                if counter == 0:
+                    title_bar = []
+                    for view in self.__views.values():
+                        view.update(terminal)
+                        view.blink()
+                        if view.get_top_index() > 0:
+                            title_bar.append(
+                                f"{view.get_top_index()}:{view.get_status().abbreviation()}"
+                            )
+                    terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
+                    terminal.flush()
+                    counter = ViewController.UPDATES_PER_SECOND
+                elif counter == ViewController.BLINKER_INTERVAL:
+                    for view in self.__views.values():
+                        view.update_status(terminal)
+                        view.blink()
+                else:
+                    for view in self.__views.values():
+                        view.update_status(terminal)
 
     def __create_header(self) -> None:
         self.__views[View.HEADER] = View(header=True)
@@ -92,14 +96,14 @@ class ViewController:
         view_rows = max(1, (char_rows - View.HEADER_HEIGHT) // View.ROW_MIN_SIZE)
         view_cols = max(1, (char_cols - 1) // View.COL_MIN_SIZE)
         view_col_size = char_cols // view_cols
-        slots = iter(sorted(slot for slot in self.__views.keys() if slot > 0))
+        slots = iter(sorted(slot for slot in self.__views.keys() if slot >= 0))
         for row in range(view_rows):
             for col in range(view_cols):
                 try:
                     slot = next(slots)
                     self.__views[slot].resize(
                         origin_row=row * View.ROW_MIN_SIZE + View.HEADER_HEIGHT,
-                        origin_col=col * view_col_size,
+                        origin_col=col * view_col_size + 1,
                         rows=View.ROW_MIN_SIZE,
                         cols=view_col_size,
                     )
@@ -116,8 +120,9 @@ class ViewController:
     def _(self, message: InitMessage):
         if message.provider == Message.Provider.SLOT:
             view = View()
-            view.set_head_index(message.index + 1)
+            view.set_top_index(message.index + 1)
             self.__views[message.index] = view
+            self.__redraw_required = True
 
     @__dispatch_message.register
     def _(self, message: RedrawMessage):
@@ -140,7 +145,13 @@ class ViewController:
                     )
                 )
             else:
-                view.set_status(View.Status(View.Status.State.PROCESS_WAIT))
+                view.set_status(
+                    View.Status(
+                        state=View.Status.State.PROCESS_WAIT,
+                        provider=view.get_status().provider,
+                        message=view.get_status().message,
+                    )
+                )
 
     @__dispatch_message.register
     def _(self, message: CountMessage):
@@ -153,6 +164,15 @@ class ViewController:
         if message.index in self.__views:
             view = self.__views[message.index]
             view.set_filepath(message.path)
+            if message.provider == Message.Provider.DOWNLOAD:
+                view.set_status(View.Status(View.Status.State.DOWNLOAD))
+
+    @__dispatch_message.register
+    def _(self, message: UrlMessage):
+        if message.index in self.__views:
+            ...
+            # view = self.__views[message.index]
+            # view.set_url(message.url)
 
     @__dispatch_message.register
     def _(self, message: EntityMessage):
@@ -169,11 +189,17 @@ class ViewController:
             view = self.__views[message.index]
             view.set_item_progress(message.progress)
             if message.provider == Message.Provider.HOOK:
-                if message.progress.process == Hook.State.PROGRESS:
-                    if message.progress.status == Hook.Status.DOWNLOADING:
+                if (
+                    message.progress.process.lower()
+                    == Hook.State.PROGRESS.value.lower()
+                ):
+                    if (
+                        message.progress.status.lower()
+                        == Hook.Status.DOWNLOADING.value.lower()
+                    ):
                         view.set_status(View.Status(View.Status.State.DOWNLOAD))
                 else:
-                    if message.progress.status == Hook.Status.STARTED:
+                    if message.progress.status == Hook.Status.STARTED.value:
                         view.set_status(
                             View.Status(
                                 state=View.Status.State.PROCESS,
@@ -181,7 +207,7 @@ class ViewController:
                                 message=message.progress.status,
                             )
                         )
-                    elif message.progress.status == Hook.Status.FINISHED:
+                    elif message.progress.status == Hook.Status.FINISHED.value:
                         view.set_status(
                             View.Status(
                                 state=View.Status.State.INACTIVE,
@@ -200,14 +226,13 @@ class ViewController:
     def _(self, message: InfoMessage):
         if message.index in self.__views:
             view = self.__views[message.index]
-            if isinstance(message.provider, str):
-                view.set_status(
-                    status=View.Status(
-                        View.Status.State.PROCESS,
-                        provider=message.provider,
-                        message=message.target,
-                    )
+            view.set_status(
+                status=View.Status(
+                    View.Status.State.PROCESS,
+                    provider=message.message,
+                    message=message.target,
                 )
+            )
 
     @__dispatch_message.register
     def _(self, message: WarningMessage):

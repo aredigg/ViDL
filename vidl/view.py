@@ -10,7 +10,6 @@ from .item import Item
 from .ringbuffer import RingBuffer
 from .terminal import Terminal
 from .util import Util
-from .view_controller import ViewController
 
 
 class View:
@@ -61,8 +60,27 @@ class View:
                     return ANSI.Color.BurntSienna + "✖" + ANSI.Color.DefaultFg
                 case self.State.ERROR:
                     return ANSI.Color.Cerise + "✖" + ANSI.Color.DefaultFg
-                case _:
-                    raise ValueError(f"Incorrect state: {self.state}")
+
+        def abbreviation(self) -> str:
+            match self.state:
+                case self.State.INACTIVE:
+                    return "IN"
+                case self.State.WAITING:
+                    return "WT"
+                case self.State.SLEEPING:
+                    return "SP"
+                case self.State.DOWNLOAD:
+                    return "DL"
+                case self.State.DOWNLOAD_WAIT:
+                    return "DW"
+                case self.State.PROCESS:
+                    return "PR"
+                case self.State.PROCESS_WAIT:
+                    return "PW"
+                case self.State.WARNING:
+                    return "WR"
+                case self.State.ERROR:
+                    return "ER"
 
     @dataclass
     class Top:
@@ -80,7 +98,7 @@ class View:
         self.__size = View.Size(rows=1, cols=1)
         self.__border = border
         self.__header = header
-        self.__head_index = 0
+        self.__top_index = 0
         self.__view_top_decorator = ("", "")
         if Config.settings["General"]["nerd_fonts"]:
             self.__view_top_decorator = (View.NF_PREFIX, View.NF_SUFFIX)
@@ -90,7 +108,7 @@ class View:
         self.__top = View.Top()
         self.__temp_filepath: str | None = None
         self.__playlist_length = 0
-        self.__bitrate_ring = RingBuffer(ViewController.UPDATES_PER_SECOND * 10)
+        self.__bitrate_ring = RingBuffer(40)
         self.__item_entity: Item.Entity | None = None
         self.__item_progress: Item.Progress | None = None
         self.__item_media: Item.Media | None = None
@@ -108,7 +126,7 @@ class View:
             self.__view_top_decorator[0]
             + ANSI.Inverse
             + " "
-            + f"{str(self.__head_index):>2.2}"
+            + f"{str(self.__top_index):>2.2}"
             + title
             + " "
             + ANSI.InverseReset
@@ -138,26 +156,38 @@ class View:
         line = f"{self.__status.symbol()}  {self.timer()}"
         if self.__status.state == View.Status.State.DOWNLOAD:
             if self.__item_progress is not None:
-                if time_total := self.__smooth_total_time():
-                    remaining_time = Util.format_seconds(time_total)
-                    eta = f"ETA {Util.get_time(int(time()) + time_total)}"
+                if self.__item_progress.size_total:
+                    remaining_time = self.__smooth_remaining_time()
+                    remaining_string = Util.format_seconds(remaining_time)
+                    eta = f"ETA {Util.get_time(int(time()) + remaining_time)}"
                     length = (
                         self.__size.cols
                         - ANSI.len(line)
-                        - ANSI.len(remaining_time)
+                        - ANSI.len(remaining_string)
                         - ANSI.len(eta)
                         - 19
                     )
                     meter = self.__progress_meter(
                         length, self.__item_progress.percent, "━"
                     )
-                    line = line + "/ " + remaining_time + " " + meter + "  " + eta
+                    line = line + "/ " + remaining_string + " " + meter + "  " + eta
                     terminal.print(
                         line, self.__size.origin_row + 2, self.__size.origin_col + 6
                     )
                 elif self.__item_progress.size_current:
                     size = int(self.__item_progress.size_current) >> 20
                     line = line + " " + f"{size:>6} MB"
+                    if self.__timer is not None:
+                        timer = max(1, int(time()) - self.__timer)
+                        if timer > 10:
+                            bitrate = (
+                                int(
+                                    (int(self.__item_progress.size_current) << 3)
+                                    / timer
+                                )
+                                >> 10
+                            )
+                            line = line + " " + f"{bitrate:>6} kbps"
                     line_len = ANSI.len(line)
                     if line_len < self.__size.cols - 10:
                         line = line + " " * (self.__size.cols - 10 - line_len)
@@ -167,18 +197,19 @@ class View:
                             self.__size.origin_col + 6,
                         )
         else:
-            color = ""
-            if self.__status.state == View.Status.State.ERROR:
-                color = ANSI.Color.Cerise
-            elif self.__status.state == View.Status.State.WARNING:
-                color = ANSI.Color.BurntSienna
-            else:
-                color = ANSI.Color.NeonChartreuse
-            line = (
-                line
-                + f"  {self.__status.provider}: "
-                + f"{color}{self.__status.message}{ANSI.Color.DefaultFg}"
-            )
+            if self.__status.provider or self.__status.message:
+                color = ""
+                if self.__status.state == View.Status.State.ERROR:
+                    color = ANSI.Color.Cerise
+                elif self.__status.state == View.Status.State.WARNING:
+                    color = ANSI.Color.BurntSienna
+                else:
+                    color = ANSI.Color.NeonChartreuse
+                line = (
+                    line
+                    + f"  {self.__status.provider}: "
+                    + f"{color}{self.__status.message}{ANSI.Color.DefaultFg}"
+                )
             line_len = ANSI.len(line)
             if line_len < self.__size.cols - 10:
                 line = line + " " * (self.__size.cols - 10 - line_len)
@@ -188,21 +219,20 @@ class View:
 
     def __item_line(self, terminal: Terminal):
         if self.__item_entity is not None:
+            max_len = self.__size.cols - 34
             index = 0
-            if self.__item_entity.playlist_index:
-                index = self.__item_entity.playlist_index
-            else:
-                index = (
-                    self.__playlist_length - self.__item_entity.index
-                    if self.__playlist_length
-                    else self.__item_entity.index
-                )
+            index_string = ""
+            if self.__item_entity.index:
+                index = self.__item_entity.index
+            if index > 0 and self.__playlist_length > 0:
+                index = max(1, self.__playlist_length - index + 1)
+                index_string = str(index)
             line = (
                 f"{Util.get_date(self.__item_entity.date):>10.10}"
                 + " │ "
-                + f"{index:>4.4}"
+                + f"{index_string:>4.4}"
                 + " │ "
-                + f"{self.__item_entity.title}"
+                + f"{self.__item_entity.title:{max_len}.{max_len}}"
             )
             line_len = ANSI.len(line)
             if line_len < self.__size.cols - 10:
@@ -237,6 +267,7 @@ class View:
             )
 
     def __media_line(self, terminal: Terminal):
+        max_len = self.__size.cols - 30
         if self.__item_media is not None:
             line = f"│ {Util.format_seconds(self.__item_media.length, two_parts=False)} {self.__item_media.extension}"
             if self.__item_progress is not None and self.__item_entity is not None:
@@ -248,31 +279,44 @@ class View:
                 if self.__item_progress.size_total:
                     size = int(self.__item_progress.size_total) >> 20
                     line = line + " " + f"{size:>6} MB"
-            if ANSI.len(line) < self.__size.cols - 30:
+            if ANSI.len(line) < max_len:
                 terminal.print(
-                    f"{line:<28.28}",
+                    f"{line:<{max_len}.{max_len}}",
                     self.__size.origin_row + 6,
                     self.__size.origin_col + 22,
                 )
-            line = f"│ {self.__item_media.video_stat:<28.28}"
-            if ANSI.len(line) < self.__size.cols - 30:
+            line = f"│ {self.__item_media.video_stat}"
+            if ANSI.len(line) < max_len:
                 terminal.print(
-                    line, self.__size.origin_row + 7, self.__size.origin_col + 22
+                    f"{line:<{max_len}.{max_len}}",
+                    self.__size.origin_row + 7,
+                    self.__size.origin_col + 22,
                 )
-            line = f"│ {self.__item_media.audio_stat:<28.28}"
-            if ANSI.len(line) < self.__size.cols - 30:
+            line = f"│ {self.__item_media.audio_stat}"
+            if ANSI.len(line) < max_len:
                 terminal.print(
-                    line, self.__size.origin_row + 8, self.__size.origin_col + 22
+                    f"{line:<{max_len}.{max_len}}",
+                    self.__size.origin_row + 8,
+                    self.__size.origin_col + 22,
                 )
-            line = f"│ {self.__item_media.subtitle_stat:<28.28}"
-            if ANSI.len(line) < self.__size.cols - 30:
+            line = f"│ {self.__item_media.subtitle_stat}"
+            if ANSI.len(line) < max_len:
                 terminal.print(
-                    line, self.__size.origin_row + 9, self.__size.origin_col + 22
+                    f"{line:<{max_len}.{max_len}}",
+                    self.__size.origin_row + 9,
+                    self.__size.origin_col + 22,
+                )
+        elif self.__item_entity is not None:
+            for rb in range(6, 10):
+                terminal.print(
+                    "│" + " " * (max_len - 1),
+                    self.__size.origin_row + rb,
+                    self.__size.origin_col + 22,
                 )
         else:
             for rb in range(6, 10):
                 terminal.print(
-                    " " * 28,
+                    " " * max_len,
                     self.__size.origin_row + rb,
                     self.__size.origin_col + 22,
                 )
@@ -285,7 +329,7 @@ class View:
         meter = kind * progress + ANSI.Dim + kind * remaining + ANSI.DimReset
         return meter
 
-    def __smooth_total_time(self) -> int:
+    def __smooth_remaining_time(self) -> int:
         if self.__item_progress is not None:
             elapsed = self.__item_progress.time_current
             size = int(self.__item_progress.size_current)
@@ -303,12 +347,20 @@ class View:
         return 0
 
     def __update_filesize(self) -> None:
-        if self.__temp_filepath is not None and self.__item_progress is not None:
+        size_current = 0
+        if self.__temp_filepath is not None:
             for filename in [self.__temp_filepath, self.__temp_filepath + ".part"]:
                 try:
-                    self.__item_progress.size_current = os.path.getsize(filename)
+                    size_current = os.path.getsize(filename)
                 except OSError:
                     ...
+        if self.__item_progress is None:
+            self.__item_progress = Item.Progress(
+                size_current=size_current, size_total=size_current
+            )
+        else:
+            if size_current > self.__item_progress.size_current:
+                self.__item_progress.size_current = size_current
 
     def resize(
         self,
@@ -317,28 +369,27 @@ class View:
         origin_row: int | None = None,
         origin_col: int | None = None,
     ) -> Size:
-        return replace(
+        self.__size = replace(
             self.__size,
             rows=self.__size.rows if rows is None else rows,
             cols=self.__size.cols if cols is None else cols,
-            origin_row=self.__size.origin_row if origin_row is None else origin_row,
-            origin_col=self.__size.origin_col if origin_col is None else origin_col,
+            origin_row=(self.__size.origin_row if origin_row is None else origin_row),
+            origin_col=(self.__size.origin_col if origin_col is None else origin_col),
         )
+        return self.__size
 
     def reset(self) -> None:
-        self.__timer = None
         self.__time_divider = ":"
         self.__temp_filepath = None
-        self.__playlist_length = 0
         self.__item_entity = None
         self.__item_progress = None
         self.__item_media = None
 
-    def set_head_index(self, index: int) -> None:
-        self.__head_index = index
+    def set_top_index(self, index: int) -> None:
+        self.__top_index = index
 
-    def get_head_index(self) -> int:
-        return self.__head_index
+    def get_top_index(self) -> int:
+        return self.__top_index
 
     def update_status(self, terminal: Terminal) -> None:
         if self.__header:
@@ -356,7 +407,7 @@ class View:
             self.__draw_border(terminal)
             self.__status_line(terminal)
 
-    def blink(self, terminal: Terminal) -> None:
+    def blink(self) -> None:
         if self.__time_divider == ":":
             self.__time_divider = " "
         else:
@@ -365,13 +416,16 @@ class View:
     def set_status(self, status: Status) -> None:
         self.__status = status
 
+    def get_status(self) -> Status:
+        return self.__status
+
     def set_timer(self, time_offset: int) -> None:
         self.__timer = int(time()) + time_offset
 
     def timer(self) -> str:
         if self.__timer is not None:
             return Util.format_seconds(int(time()) - self.__timer)
-        return f"--{self.__time_divider}--"
+        return "--:--"
 
     def set_top(self, name: str) -> None:
         self.__top = View.Top(name=name)

@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from time import time
 
 from .config import Config
-from .hook import Hook
 
 
 class Item:
@@ -20,18 +19,18 @@ class Item:
 
     @dataclass
     class Progress:
-        time_current: float
-        time_total: float
-        size_current: float
-        size_total: float
-        fragment_current: int
-        fragment_total: int
-        bitrate: float
-        eta: int
-        percent: float
-        process: str
-        status: str
-        extension: str
+        time_current: float = 0.0
+        time_total: float = 0.0
+        size_current: float = 0
+        size_total: float = 0
+        fragment_current: int = 0
+        fragment_total: int = 0
+        bitrate: float = 0
+        eta: int = 0
+        percent: float = 0
+        process: str = ""
+        status: str = ""
+        extension: str = "---"
 
     @dataclass
     class Media:
@@ -77,7 +76,7 @@ class Item:
 
         return Item.Progress(
             time_current=elapsed,
-            time_total=remaining,
+            time_total=elapsed + remaining,
             size_current=downloaded_bytes,
             size_total=total_bytes,
             fragment_current=data.get("fragment_index", 0),
@@ -85,7 +84,7 @@ class Item:
             bitrate=bitrate,
             eta=data.get("eta", 0),
             percent=data.get("_percent", 0.0),
-            process=data.get("postprocessor", Hook.State.PROGRESS),
+            process=data.get("postprocessor", "Progress"),
             status=data.get("status", ""),
             extension=f"{extension:<4.4}",
         )
@@ -144,7 +143,7 @@ class Item:
 
     @staticmethod
     def enumerate_best_format(info, extension="mp4"):
-        formats = info.get("formats")
+        formats = info.get("formats") or []
 
         def key(format):
             dynamic_range = (format.get("dynamic_range") or "SDR").upper()

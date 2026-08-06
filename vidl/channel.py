@@ -65,7 +65,6 @@ class Channel:
             self.__last_attempt_date = 0
         self.__last_error = last_error
         self.__sub_level = sub_level
-        self.__item = None
         self.__active = False
         self.__slot_index = None
         self.__epoch_cutoff = None
@@ -201,7 +200,7 @@ class Channel:
                     return False
 
                 process_time = int(time())
-                ret = self.__download(processor)
+                ret = self.__download(processor, info)
                 cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
                 sleep_time = min(cutoff, int(time()) - process_time)
                 if self.__slot_index is not None:
@@ -225,9 +224,13 @@ class Channel:
     def report_error(self, message):
         self.__set_error(message)
 
-    def __download(self, processor):
-        if item := self.__item:
-            return processor.download([item.original_url or item.webpage_url]) == 0
+    def __download(self, processor, info):
+        return (
+            processor.download(
+                [info.get("original_url", "") or info.get("webpage_url", "")]
+            )
+            == 0
+        )
 
     def __set_attempt_date(self):
         with Channel.__lock:

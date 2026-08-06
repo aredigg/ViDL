@@ -141,6 +141,7 @@ class Config:
             "minimum_resolution",
             "minimum_duration",
             "playlist_cutoff",
+            "resolution_defer",
             "sleep_interval",
             "post_sleep_cutoff",
         ):
@@ -157,10 +158,6 @@ class Config:
         elif Config.settings["Channels"]["slots"] < 0:
             print("ERROR: Channels.slots must be positive", file=sys.stderr)
             result = False
-        for key in ("file_name", "archived"):
-            if not Config.settings["Channels"][key]:
-                print(f"ERROR: Channels.{key} missing", file=sys.stderr)
-                result = False
         if not Config.settings["Paths"]["output"]:
             print("ERROR: Paths.output missing", file=sys.stderr)
             result = False

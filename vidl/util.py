@@ -6,7 +6,7 @@ class Util:
     time_fmt = "%H:%M"
 
     @staticmethod
-    def format_seconds(seconds, include_seconds=True, two_parts=True):
+    def format_seconds(seconds: int, include_seconds=True, two_parts=True):
         if seconds < 0:
             seconds = -seconds
         hr = int(seconds / 3600)

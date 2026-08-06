@@ -4,6 +4,10 @@ from .unicode import Unicode
 
 
 class ANSI:
+    SEQUENCE_MATCH = re.compile(
+        r"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])"
+    )
+
     ClearScreen = "\x1b[0m\x1b[2J"
 
     Inverse = "\x1b[7m"
@@ -49,7 +53,7 @@ class ANSI:
 
     @staticmethod
     def remove(string):
-        return re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]").sub("", string)
+        return ANSI.SEQUENCE_MATCH.sub("", string)
 
     @staticmethod
     def title_bar(string):
@@ -69,17 +73,16 @@ class ANSI:
 
     @staticmethod
     def trim(string, length):
-        regex = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
         pos = 0
         escapes = []
         while pos < len(string):
-            match = regex.match(string, pos)
+            match = ANSI.SEQUENCE_MATCH.match(string, pos)
             if match:
                 escapes.append((match.group(), pos))
                 pos = match.end()
             else:
                 pos += 1
-        string = regex.sub("", string)
+        string = ANSI.SEQUENCE_MATCH.sub("", string)
         while ANSI.len(string) > length:
             string = string[:-1]
         for escape, pos in escapes:

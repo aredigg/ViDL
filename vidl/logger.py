@@ -1,16 +1,14 @@
 import re
 
-from vidl.debug import Debug
-
+from .debug import Debug
 from .message import (
     ErrorMessage,
-    FilePathMessage,
     InfoMessage,
     Message,
-    Msg,
+    PathMessage,
     SleepMessage,
-    URLMessage,
-    WarnMessage,
+    UrlMessage,
+    WarningMessage,
 )
 
 
@@ -66,14 +64,11 @@ class Logger:
         if provider is not None:
             target, provider_message = self.__parse(provider_message)
             self.__view_queue.put(
-                Message(
-                    kind=Msg.ERROR,
-                    body=ErrorMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        target=target,
-                        message=provider_message,
-                    ),
+                ErrorMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=target or "",
+                    message=provider_message,
                 )
             )
             Debug.print(
@@ -81,14 +76,11 @@ class Logger:
             )
         else:
             self.__view_queue.put(
-                Message(
-                    kind=Msg.ERROR,
-                    body=ErrorMessage(
-                        index=self.__slot_index,
-                        provider="logger",
-                        target=None,
-                        message=message,
-                    ),
+                ErrorMessage(
+                    index=self.__slot_index,
+                    provider=Message.Provider.LOGGER,
+                    target="",
+                    message=message,
                 )
             )
             Debug.print(f"ERR {self.__slot_index} --> {message}")
@@ -102,26 +94,20 @@ class Logger:
     def __parse_to_view(self, provider, message):
         if match := self.__parse_prefix("Extracting URL: ", message):
             self.__view_queue.put(
-                Message(
-                    kind=Msg.INFO,
-                    body=URLMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        url=match,
-                    ),
+                UrlMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    url=match,
                 )
             )
             return
 
         if match := self.__parse_prefix("Destination: ", message):
             self.__view_queue.put(
-                Message(
-                    kind=Msg.INFO,
-                    body=FilePathMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        path=match,
-                    ),
+                PathMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    path=match,
                 )
             )
             return
@@ -130,42 +116,33 @@ class Logger:
             ": has already been recorded in the archive", message
         ):
             self.__view_queue.put(
-                Message(
-                    kind=Msg.WARN,
-                    body=WarnMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        target=match,
-                        message="Already recorded",
-                    ),
+                WarningMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=match,
+                    message="Already recorded",
                 )
             )
             return
 
         if match := self.__parse_suffix(": Downloading webpage", message):
             self.__view_queue.put(
-                Message(
-                    kind=Msg.INFO,
-                    body=InfoMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        target=match,
-                        message="Downloading",
-                    ),
+                InfoMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=match,
+                    message="Downloading",
                 )
             )
             return
 
         if match := self.__parse_suffix(": Downloading JSON metadata", message):
             self.__view_queue.put(
-                Message(
-                    kind=Msg.INFO,
-                    body=InfoMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        target=match,
-                        message="Metadata",
-                    ),
+                InfoMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=match,
+                    message="Metadata",
                 )
             )
             return
@@ -173,14 +150,11 @@ class Logger:
         match = Logger.MESSAGE_DOWNLOAD_PAGE.fullmatch(message)
         if match is not None:
             self.__view_queue.put(
-                Message(
-                    kind=Msg.INFO,
-                    body=InfoMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        target=match.group(1),
-                        message="Metadata",
-                    ),
+                InfoMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=match.group(1),
+                    message="Metadata",
                 )
             )
             return
@@ -188,14 +162,11 @@ class Logger:
         match = Logger.MESSAGE_RETRY_ERROR.fullmatch(message)
         if match is not None:
             self.__view_queue.put(
-                Message(
-                    kind=Msg.INFO,
-                    body=ErrorMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        target=f"Retry {int(match.group(3))}/{int(match.group(4))}",
-                        message="Metadata",
-                    ),
+                InfoMessage(
+                    index=self.__slot_index,
+                    provider=provider,
+                    target=f"Retry {int(match.group(3))}/{int(match.group(4))}",
+                    message="Metadata",
                 )
             )
             return
@@ -204,13 +175,10 @@ class Logger:
         if match is not None:
             try:
                 self.__view_queue.put(
-                    Message(
-                        kind=Msg.SLEEP,
-                        body=SleepMessage(
-                            index=self.__slot_index,
-                            provider=provider,
-                            time_offset=int(float(match.group(1))),
-                        ),
+                    SleepMessage(
+                        index=self.__slot_index,
+                        provider=provider,
+                        sleep_time=int(float(match.group(1))),
                     )
                 )
             except ValueError:

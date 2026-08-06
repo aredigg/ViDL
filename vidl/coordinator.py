@@ -3,16 +3,16 @@ from time import sleep
 
 from .channel import Channel
 from .config import Config
-from .message import Message, Msg, RedrawMessage
+from .message import RedrawMessage
 from .slot import Slot
-from .view import View
+from .view_controller import ViewController
 
 
 class Coordinator:
     def __init__(self) -> None:
         self.__running = True
-        self.__view = View()
-        self.__view_queue, self.__input_queue = self.__view.get_queues()
+        self.__view = ViewController()
+        self.__view_queue = self.__view.get_queue()
         self.__channels = []
         self.__slots = []
         self.__error = None
@@ -83,8 +83,4 @@ class Coordinator:
         self.__running = False
 
     def redraw(self):
-        self.__view_queue.put(
-            Message(
-                kind=Msg.UPDATE, body=RedrawMessage(index=-1, provider="coordinator")
-            )
-        )
+        self.__view_queue.put(RedrawMessage())

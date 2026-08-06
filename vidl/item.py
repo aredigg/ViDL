@@ -1,149 +1,151 @@
 from dataclasses import dataclass
+from time import time
 
 from .config import Config
+from .hook import Hook
 
 
-@dataclass
 class Item:
-    id: str
-    title: str
-    channel: str
-    uploader: str
-    thumbnail: str
-    is_live: bool
-    availability: str
-    age_limit: int
-    webpage_url: str
-    original_url: str
-    webpage_url_basename: str
-    webpage_url_domain: str
-    extractor: str
-    extractor_key: str
-    playlist: str
-    playlist_index: int
-    display_id: str
-    fulltitle: str
-    release_year: str
-    live_status: str
-    timestamp: int
-    duration: int
-    epoch: int
-    _type: str
-    _filename: str
-    _real_download: bool
-    _finaldir: str
-    filepath: str
-    _files_to_move: str
-    width: int
-    height: int
-    fps: int
-    asr: int
-    audio_channels: int
-    dynamic_range: str
-    vcodec: str
-    acodec: str
-    ext: str
-    format_id: str
-    protocol: str
-    tbr: int
-    status: str
-    processor: str
-    filename: str
-    elapsed: float
-    downloaded_bytes: int
-    total_bytes: int
-    fragment_index: int
-    fragment_count: int
-    speed: float
-    eta: float
-    _percent: float
+    @dataclass
+    class Entity:
+        id: str
+        index: int = 0
+        playlist_index: int = 0
+        date: int = 0
+        title: str = ""
+        availability: str = ""
+        age_limit: int = 0
+        stream: str = ""
+        top_name: str = ""
 
-    def valid_format(self):
-        if (
-            not Config.settings["Download"]["allow_vertical"]
-            and self.height > self.width
-        ):
-            return False
+    @dataclass
+    class Progress:
+        time_current: float
+        time_total: float
+        size_current: float
+        size_total: float
+        fragment_current: int
+        fragment_total: int
+        bitrate: float
+        eta: int
+        percent: float
+        process: str
+        status: str
+        extension: str
+
+    @dataclass
+    class Media:
+        length: int
+        extension: str
+        video_stat: str
+        audio_stat: str
+        subtitle_stat: str
+
+    @staticmethod
+    def get_entity(info, name, index) -> Entity:
+        stream = "VIDEO"
+        if info.get("is_live", False):
+            stream = "LIVE"
+        elif info.get("live_status", "") in ("is_upcoming", "was_live", "post_live"):
+            stream = "STREAM"
+        return Item.Entity(
+            id=info.get("id", ""),
+            index=index,
+            playlist_index=info.get("playlist_index", 0),
+            date=info.get("timestamp") or info.get("epoch", 0),
+            title=info.get("title", ""),
+            availability=info.get("availability", ""),
+            age_limit=info.get("age_limit", 0),
+            stream=f"{stream:<6.6}",
+            top_name=name,
+        )
+
+    @staticmethod
+    def get_progress(data) -> Progress:
+        elapsed = data.get("elapsed", 0.0)
+        downloaded_bytes = data.get("downloaded_bytes", 0)
+        total_bytes = data.get("total_bytes") or data.get("total_bytes_estimate", 0)
+        bitrate = 0
+        if elapsed and downloaded_bytes:
+            bitrate = int((downloaded_bytes << 3) / elapsed) >> 10
+        remaining_bits = int(total_bytes - downloaded_bytes) >> 7
+        remaining = int(remaining_bits / bitrate) if bitrate > 0 else 0
+        extension = "----"
+        parts = data.get("filename", "").upper().split(".")
+        if len(parts) > 0:
+            extension = parts[-1]
+
+        return Item.Progress(
+            time_current=elapsed,
+            time_total=remaining,
+            size_current=downloaded_bytes,
+            size_total=total_bytes,
+            fragment_current=data.get("fragment_index", 0),
+            fragment_total=data.get("fragment_count", 0),
+            bitrate=bitrate,
+            eta=data.get("eta", 0),
+            percent=data.get("_percent", 0.0),
+            process=data.get("postprocessor", Hook.State.PROGRESS),
+            status=data.get("status", ""),
+            extension=f"{extension:<4.4}",
+        )
+
+    @staticmethod
+    def get_media(info) -> Media:
+        width = info.get("width", 0)
+        height = info.get("height", 0)
+        video_stat = audio_stat = subtitle_stat = ""
+        if width and height:
+            video_stat = f"{str(width):>4.4}x{str(height):<4.4}@{str(int(info.get('fps', 0))):<3.3} {info.get('dynamic_range', 'SDR'):<6.6} {(info.get('vcodec', '----'))[:4].upper()}"
+        asr = info.get("asr", 0)
+        audio_channels = info.get("audio_channels", 0)
+        if asr and audio_channels:
+            audio_stat = f"{str(asr):>6.6}x{str(audio_channels):<2.2} {(info.get('acodec', '----'))[:4].upper()}"
+        requested_subtitles = info.get("requested_subtitles") or {}
+        subtitles = [lang for lang in requested_subtitles.keys()]
+        subtitle_stat = "/".join(subtitles)
+        return Item.Media(
+            length=info.get("duration", 0),
+            extension=info.get("ext", "---").upper(),
+            video_stat=video_stat,
+            audio_stat=audio_stat,
+            subtitle_stat=subtitle_stat,
+        )
+
+    @staticmethod
+    def no_vertical(info):
+        width = info.get("width", 0)
+        height = info.get("height", 0)
+        return not Config.settings["Download"]["allow_vertical"] and height > width
+
+    @staticmethod
+    def high_resolution(info):
+        height = info.get("height", 0)
         if minimum_resolution := Config.settings["Download"]["minimum_resolution"]:
-            return self.height == 0 or self.height >= minimum_resolution
+            return height == 0 or height >= minimum_resolution
         return True
 
-    def within_cutoff(self, channel):
+    @staticmethod
+    def within_cutoff(info, channel):
+        timestamp = info.get("timestamp", 0)
         if cutoff := Config.settings["Download"]["playlist_cutoff"]:
-            return not self.timestamp or self.timestamp >= channel.set_epoch_cutoff(
-                cutoff * 86_400
+            return not timestamp or (
+                timestamp >= channel.set_epoch_cutoff(cutoff * 86_400)
             )
         return True
 
     @staticmethod
-    def get_status(data):
-        return (
-            data.get("status") or "",
-            data.get("postprocessor") or "progress",
-            data.get("filename") or "",
-            data.get("elapsed") or 0.0,
-            data.get("downloaded_bytes") or 0,
-            data.get("total_bytes") or data.get("total_bytes_estimate") or 0,
-            data.get("fragment_index") or 0,
-            data.get("fragment_count") or 0,
-            data.get("speed") or 0.0,
-            data.get("eta") or 0,
-            data.get("_percent") or 0.0,
-        )
+    def outside_deferred(info, format):
+        height = format.get("height", 0)
+        timestamp = info.get("timestamp", 0)
+        if defer := Config.settings["Download"]["resolution_defer"]:
+            return timestamp < (int(time()) - defer * 86_400) or height > 2000
+        return True
 
     @staticmethod
-    def get_details(info):
-        return (
-            info.get("id") or "",
-            info.get("title") or "",
-            info.get("channel") or "",
-            info.get("uploader") or "",
-            info.get("thumbnail") or "",
-            info.get("is_live") or False,
-            info.get("availability") or "",
-            info.get("age_limit") or 0,
-            info.get("webpage_url") or "",
-            info.get("original_url") or "",
-            info.get("webpage_url_basename") or "",
-            info.get("webpage_url_domain") or "",
-            info.get("extractor") or "",
-            info.get("extractor_key") or "",
-            info.get("playlist") or "",
-            info.get("playlist_index") or 0,
-            info.get("display_id") or "",
-            info.get("fulltitle") or "",
-            info.get("release_year") or "",
-            info.get("live_status") or "",
-            info.get("timestamp") or 0,
-            info.get("duration") or 0,
-            info.get("epoch") or 0,
-            info.get("_type") or "",
-            info.get("_filename") or "",
-            info.get("__real_download") or False,
-            info.get("__finaldir") or "",
-            info.get("filepath") or "",
-            info.get("__files_to_move") or "",
-        )
+    def enumerate_best_format(info, extension="mp4"):
+        formats = info.get("formats")
 
-    @staticmethod
-    def get_format(format):
-        return (
-            format.get("width") or 0,
-            format.get("height") or 0,
-            format.get("fps") or 0,
-            format.get("asr") or 0,
-            format.get("audio_channels") or 0,
-            format.get("dynamic_range") or "SDR",
-            (format.get("vcodec") or "----")[:4],
-            (format.get("acodec") or "----")[:4],
-            format.get("ext") or "---",
-            format.get("format_id") or "",
-            format.get("protocol") or "",
-            format.get("tbr") or format.get("vbr") or 0,
-        )
-
-    @staticmethod
-    def enumerate_best_format(formats, extension="mp4"):
         def key(format):
             dynamic_range = (format.get("dynamic_range") or "SDR").upper()
             return (
@@ -159,24 +161,4 @@ class Item:
             for format in formats
             if (format.get("ext") or "").lower() == extension.lower()
         ]
-        return Item.get_format(max(matching, key=key, default={}))
-
-    @staticmethod
-    def get_item(info):
-        return Item(
-            *(
-                Item.get_details(info or {})
-                + Item.enumerate_best_format(info.get("formats") or [])
-                + Item.get_status({})
-            )
-        )
-
-    @staticmethod
-    def get_item_hooks(data):
-        return Item(
-            *(
-                Item.get_details(data.get("info_dict") or {})
-                + Item.get_format(data.get("info_dict") or {})
-                + Item.get_status(data or {})
-            )
-        )
+        return max(matching, key=key, default={})

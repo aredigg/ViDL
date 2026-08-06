@@ -4,90 +4,82 @@ from enum import Enum
 from .item import Item
 
 
-class Msg(Enum):
-    HALT = 0
-    SLEEP = 1
-    INIT = 2
-    UPDATE = 3
-    INFO = 4
-    WARN = 5
-    ERROR = 6
+@dataclass
+class Message:
+    class Provider(Enum):
+        CHANNEL = "channel"
+        DOWNLOAD = "download"
+        HOOK = "hook"
+        LOGGER = "logger"
+        SLOT = "slot"
 
 
 @dataclass
-class ProviderMessage:
+class HaltMessage(Message): ...
+
+
+@dataclass
+class RedrawMessage(Message): ...
+
+
+@dataclass
+class SlotMessage(Message):
     index: int
-    provider: str
+    provider: Message.Provider | str
 
 
 @dataclass
-class InitMessage(ProviderMessage): ...
+class InitMessage(SlotMessage): ...
 
 
 @dataclass
-class SleepMessage(ProviderMessage):
-    time_offset: int
+class SleepMessage(SlotMessage):
+    sleep_time: float
 
 
 @dataclass
-class InfoMessage(ProviderMessage):
-    target: None | str
-    message: None | str
+class CountMessage(SlotMessage):
+    value: int
 
 
 @dataclass
-class WarnMessage(ProviderMessage):
-    target: None | str
-    message: None | str
-
-
-@dataclass
-class ErrorMessage(ProviderMessage):
-    target: None | str
-    message: None | str
-
-
-@dataclass
-class URLMessage(ProviderMessage):
-    url: str
-
-
-@dataclass
-class FilePathMessage(ProviderMessage):
+class PathMessage(SlotMessage):
     path: str
 
 
 @dataclass
-class RedrawMessage(ProviderMessage): ...
+class UrlMessage(SlotMessage):
+    url: str
 
 
 @dataclass
-class ItemMessage(ProviderMessage):
-    item: Item
-    name: None | str
-    last_date: None | str
-    playlist_index: int
+class EntityMessage(SlotMessage):
+    entity: Item.Entity
 
 
 @dataclass
-class PlaylistCountMessage(ProviderMessage):
-    playlist_count: int
+class ProgressMessage(SlotMessage):
+    progress: Item.Progress
 
 
 @dataclass
-class Message:
-    kind: Msg
-    body: None | ProviderMessage
+class MediaMessage(SlotMessage):
+    media: Item.Media
 
 
-# messages
-# - slot init (slot id)
-# - download init ()
-# - download start
-# - debug/hook
-# - download complete
-# - slot clear
+@dataclass
+class StatusMessage(SlotMessage):
+    target: str
+    message: str
 
-# slot id, status, dl size, res, bitrate, channel
-# title
-# last dl dte, timer, status msg
+
+@dataclass
+class InfoMessage(StatusMessage): ...
+
+
+@dataclass
+class WarningMessage(StatusMessage): ...
+
+
+@dataclass
+class ErrorMessage(StatusMessage): ...

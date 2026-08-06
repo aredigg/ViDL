@@ -1,15 +1,16 @@
 import sys
 import termios
 import tty
+from queue import Queue
 from shutil import get_terminal_size as size
 
 from .ansi import ANSI
 
 
 class Terminal:
-    def __init__(self, input_queue) -> None:
+    def __init__(self) -> None:
         self.__width, self.__height = size()
-        self.__input_queue = input_queue
+        self.__queue = Queue()
         self.__fd = None
         self.__old_termios = None
 

@@ -9,7 +9,7 @@ from yt_dlp import YoutubeDL
 from .config import Config
 from .hook import DownloadCancelled, Hook
 from .logger import Logger
-from .message import ErrorMessage, InitMessage, Message, Msg
+from .message import ErrorMessage, InitMessage, Message
 
 if TYPE_CHECKING:
     from yt_dlp import _Params
@@ -42,10 +42,7 @@ class Slot:
     def __run(self):
         self.__ready = True
         self.__view_queue.put(
-            Message(
-                kind=Msg.INIT,
-                body=InitMessage(index=self.__index, provider="slot"),
-            )
+            InitMessage(index=self.__index, provider=Message.Provider.SLOT)
         )
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
@@ -60,8 +57,11 @@ class Slot:
                     ...
                 except Exception as e:
                     self.__view_queue.put(
-                        Message(
-                            Msg.ERROR, ErrorMessage(self.__index, "slot", None, str(e))
+                        ErrorMessage(
+                            index=self.__index,
+                            provider=Message.Provider.SLOT,
+                            target="",
+                            message=str(e),
                         )
                     )
                 finally:

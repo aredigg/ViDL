@@ -28,6 +28,7 @@ class Config:
             "minimum_resolution": 0,
             "minimum_duration": 0,
             "playlist_cutoff": 0,
+            "resolution_defer": 0,
             "sleep_interval": 60,
             "post_sleep_cutoff": 60,
         },

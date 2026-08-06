@@ -7,8 +7,7 @@ from time import time
 
 from .config import Config
 from .item import Item
-from .message import ItemMessage, Message, Msg, PlaylistCountMessage, SleepMessage
-from .util import Util
+from .message import CountMessage, EntityMessage, Message, SleepMessage
 
 
 class Channel:
@@ -142,15 +141,13 @@ class Channel:
 
             if self.__slot_index is not None:
                 queue.put(
-                    Message(
-                        kind=Msg.INIT,
-                        body=ItemMessage(
-                            index=self.__slot_index,
-                            provider="channel",
-                            item=Item.get_item(info),
-                            name=self.__name if self.__sub_level == 0 else None,
-                            last_date=Util.get_date(self.__last_download_date),
-                            playlist_index=playlist_index,
+                    EntityMessage(
+                        index=self.__slot_index,
+                        provider=Message.Provider.CHANNEL,
+                        entity=Item.get_entity(
+                            info=info,
+                            name=self.__name if self.__sub_level == 0 else "",
+                            index=playlist_index,
                         ),
                     )
                 )
@@ -159,13 +156,10 @@ class Channel:
                 if entries := list(info.get("entries", [])):
                     if self.__slot_index is not None:
                         queue.put(
-                            Message(
-                                kind=Msg.INIT,
-                                body=PlaylistCountMessage(
-                                    index=self.__slot_index,
-                                    provider="channel",
-                                    playlist_count=len(entries),
-                                ),
+                            CountMessage(
+                                index=self.__slot_index,
+                                provider=Message.Provider.CHANNEL,
+                                value=len(entries),
                             )
                         )
                     for entry in entries:
@@ -192,33 +186,37 @@ class Channel:
                         if error := channel.get_last_error():
                             self.__set_error(f"({error})")
             else:
-                self.__item = Item.get_item(info)
-                if self.__item.valid_format() and self.__item.within_cutoff(self):
-                    process_time = int(time())
-                    ret = self.__download(processor)
-                    cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
-                    sleep_time = min(cutoff, int(time()) - process_time)
-                    if self.__slot_index is not None:
-                        queue.put(
-                            Message(
-                                kind=Msg.SLEEP,
-                                body=SleepMessage(
-                                    index=self.__slot_index,
-                                    provider="channel",
-                                    time_offset=sleep_time,
-                                ),
-                            )
-                        )
-                        sleep_until = int(time()) + sleep_time
-                        while int(time()) < sleep_until:
-                            if self.__halt_event is not None and self.__halt_event.wait(
-                                1
-                            ):
-                                return ret
-                    return ret
-                else:
-                    self.__set_error("No formats or outside cutoff")
+                format = Item.enumerate_best_format(info)
+                if Item.no_vertical(format):
+                    self.__set_error("Vertical video")
                     return False
+                if not Item.high_resolution(format):
+                    self.__set_error("Low resolution")
+                    return False
+                if not Item.within_cutoff(info, self):
+                    self.__set_error("Outside cutoff")
+                    return False
+                if not Item.outside_deferred(info, format):
+                    self.__set_error("Defer low resolution")
+                    return False
+
+                process_time = int(time())
+                ret = self.__download(processor)
+                cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
+                sleep_time = min(cutoff, int(time()) - process_time)
+                if self.__slot_index is not None:
+                    queue.put(
+                        SleepMessage(
+                            index=self.__slot_index,
+                            provider=Message.Provider.CHANNEL,
+                            sleep_time=sleep_time,
+                        )
+                    )
+                    sleep_until = int(time()) + sleep_time
+                    while int(time()) < sleep_until:
+                        if self.__halt_event is not None and self.__halt_event.wait(1):
+                            return ret
+                return ret
         else:
             self.__set_error("Nothing to process")
             return False

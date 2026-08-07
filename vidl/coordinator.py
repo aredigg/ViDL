@@ -99,7 +99,7 @@ class Coordinator:
             self.halt()
 
     def halt(self):
-        Debug.print(" === Shutdown requested === ")
+        Debug.print("=== Shutdown requested ===")
         self.__running = False
 
     def redraw(self):

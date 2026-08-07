@@ -26,19 +26,23 @@ class ANSI:
 
     class Color:
         @staticmethod
-        def __get_rgb(hex: str) -> tuple[int, int, int]:
-            hex = hex.removeprefix("#")
-            assert len(hex) == 6
-            return int(hex[0:2], 16), int(hex[2:4], 16), int(hex[4:6], 16)
+        def __get_rgb(hex_color: str) -> tuple[int, int, int]:
+            hex_color = hex_color.removeprefix("#")
+            assert len(hex_color) == 6
+            return (
+                int(hex_color[0:2], 16),
+                int(hex_color[2:4], 16),
+                int(hex_color[4:6], 16),
+            )
 
         @staticmethod
-        def fg(hex: str) -> str:
-            r, g, b = ANSI.Color.__get_rgb(hex)
+        def fg(hex_color: str) -> str:
+            r, g, b = ANSI.Color.__get_rgb(hex_color)
             return f"\x1b[38;2;{r};{g};{b}m"
 
         @staticmethod
-        def bg(hex: str) -> str:
-            r, g, b = ANSI.Color.__get_rgb(hex)
+        def bg(hex_color: str) -> str:
+            r, g, b = ANSI.Color.__get_rgb(hex_color)
             return f"\x1b[48;2;{r};{g};{b}m"
 
         DefaultFg = "\033[39m"

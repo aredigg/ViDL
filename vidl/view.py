@@ -275,12 +275,15 @@ class View:
                     size = int(self.__item_progress.size_total) >> 20
                     line += f"{size:>6} MB"
             self.__print(terminal, 6, line)
-            line = " " * OFFSET + f"│ {self.__item_media.video_stat}"
+            stats = []
+            if self.__item_media.video_stat:
+                stats.append(self.__item_media.video_stat)
+            if self.__item_media.audio_stat:
+                stats.append(self.__item_media.audio_stat)
+            line = " " * OFFSET + "│ " + " | ".join(stats)
             self.__print(terminal, 7, line)
-            line = " " * OFFSET + f"│ {self.__item_media.audio_stat}"
-            self.__print(terminal, 8, line)
             line = " " * OFFSET + f"│ {self.__item_media.subtitle_stat}"
-            self.__print(terminal, 9, line)
+            self.__print(terminal, 8, line)
         elif self.__item_entity is not None:
             for row in range(6, 10):
                 line = " " * OFFSET + "│"

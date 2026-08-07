@@ -203,8 +203,8 @@ class Channel:
                         channel.download(
                             self.__slot_index, processor, queue, playlist_index
                         )
-                        if error := channel.get_last_error():
-                            self.__report_error(queue, f"({error})")
+            #                        if error := channel.get_last_error():
+            #                            self.__report_error(queue, f"{error}")
             else:
                 format = Item.enumerate_best_format(info)
                 if Item.no_vertical(format):

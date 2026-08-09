@@ -86,6 +86,7 @@ class View:
     class Top:
         name: str = ""
         count: str = ""
+        cutoff: str = ""
 
     @dataclass(frozen=True)
     class Size:
@@ -108,7 +109,7 @@ class View:
         self.__top = View.Top()
         self.__temp_filepath: str | None = None
         self.__playlist_length = 0
-        self.__bitrate_ring = RingBuffer(40)
+        self.__bitrate_ring = RingBuffer(10)
         self.__item_entity: Item.Entity | None = None
         self.__item_progress: Item.Progress | None = None
         self.__item_media: Item.Media | None = None
@@ -136,6 +137,17 @@ class View:
             + ANSI.InverseReset
             + self.__view_top_decorator[1]
         )
+        if self.__top.cutoff:
+            header += (
+                "──"
+                + self.__view_top_decorator[0]
+                + ANSI.Inverse
+                + " "
+                + self.__top.cutoff
+                + " "
+                + ANSI.InverseReset
+                + self.__view_top_decorator[1]
+            )
         terminal.print(
             "╭"
             + ("─" * 2)
@@ -386,12 +398,6 @@ class View:
             self.__draw_border(terminal)
             self.__status_line(terminal)
 
-    def blink(self) -> None:
-        if self.__time_divider == ":":
-            self.__time_divider = " "
-        else:
-            self.__time_divider = ":"
-
     def set_status(self, status: Status) -> None:
         self.__status = status
 
@@ -416,6 +422,11 @@ class View:
         if value > 0:
             self.__top = View.Top(self.__top.name, f"({value})")
             self.__playlist_length = value
+
+    def set_cutoff(self, value: int) -> None:
+        if value > 0:
+            cutoff = Util.get_date(value)
+            self.__top = View.Top(self.__top.name, self.__top.count, cutoff=cutoff)
 
     def set_filepath(self, filepath: str) -> None:
         self.__temp_filepath = filepath

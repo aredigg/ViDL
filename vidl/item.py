@@ -131,7 +131,7 @@ class Item:
         timestamp = info.get("timestamp") or 0
         if cutoff := Config.settings["Download"]["playlist_cutoff"]:
             return not timestamp or (
-                timestamp >= channel.set_epoch_cutoff(cutoff * 86_400)
+                timestamp >= channel.set_epoch_cutoff(cutoff * 86_400, timestamp)
             )
         return True
 

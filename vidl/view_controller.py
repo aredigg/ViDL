@@ -7,6 +7,7 @@ from .ansi import ANSI
 from .hook import Hook
 from .message import (
     CountMessage,
+    CutoffMessage,
     EntityMessage,
     ErrorMessage,
     HaltMessage,
@@ -29,7 +30,6 @@ from .view import View
 class ViewController:
     index = 0
     UPDATES_PER_SECOND = 4
-    BLINKER_INTERVAL = UPDATES_PER_SECOND >> 1
     RUN_LOOP_WAIT = 1 / UPDATES_PER_SECOND
 
     def __init__(self) -> None:
@@ -68,7 +68,6 @@ class ViewController:
                     title_bar = []
                     for view in self.__views.values():
                         view.update(terminal)
-                        view.blink()
                         if view.get_top_index() > 0:
                             title_bar.append(
                                 f"{view.get_top_index()}:{view.get_status().abbreviation()}"
@@ -76,10 +75,6 @@ class ViewController:
                     terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
                     terminal.flush()
                     counter = ViewController.UPDATES_PER_SECOND
-                elif counter == ViewController.BLINKER_INTERVAL:
-                    for view in self.__views.values():
-                        view.update_status(terminal)
-                        view.blink()
                 else:
                     for view in self.__views.values():
                         view.update_status(terminal)
@@ -159,6 +154,12 @@ class ViewController:
         if message.index in self.__views:
             view = self.__views[message.index]
             view.set_count(message.value)
+
+    @__dispatch_message.register
+    def _(self, message: CutoffMessage):
+        if message.index in self.__views:
+            view = self.__views[message.index]
+            view.set_cutoff(message.value)
 
     @__dispatch_message.register
     def _(self, message: PathMessage):

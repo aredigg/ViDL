@@ -11,6 +11,7 @@ from .config import Config
 from .item import Item
 from .message import (
     CountMessage,
+    CutoffMessage,
     EntityMessage,
     ErrorMessage,
     MediaMessage,
@@ -76,7 +77,8 @@ class Channel:
         self.__sub_level = sub_level
         self.__active = False
         self.__slot_index = None
-        self.__epoch_cutoff = None
+        self.__epoch_cutoff: int = 0
+        self.__epoch_cutoff_passed = False
         self.__halt_event = None
 
     def __row(self):
@@ -101,16 +103,24 @@ class Channel:
     def get_name(self):
         return self.__name
 
-    def set_epoch_cutoff(self, epoch):
-        if self.__epoch_cutoff is None:
-            self.__epoch_cutoff = int(time()) - epoch
-        return self.__epoch_cutoff
+    def set_epoch_cutoff(self, epoch, timestamp):
+        with Channel.__lock:
+            if self.__epoch_cutoff == 0:
+                self.__epoch_cutoff = timestamp - epoch
+            return self.__epoch_cutoff
+
+    def get_epoch_cutoff(self) -> tuple[int, bool]:
+        return self.__epoch_cutoff, self.__epoch_cutoff_passed
+
+    def assign_epoch_cutoff(self, cutoff: tuple[int, bool]):
+        with Channel.__lock:
+            self.__epoch_cutoff = cutoff[0]
+            self.__epoch_cutoff_passed = cutoff[1]
 
     def set_halt_event(self, halt_event):
         self.__halt_event = halt_event
 
     def set_active(self):
-        self.__reset_epoch_cutoff()
         self.__active = True
 
     def active(self):
@@ -126,6 +136,8 @@ class Channel:
             return False
 
         self.__slot_index = slot
+        if self.__sub_level == 0:
+            self.__reset_epoch_cutoff()
         try:
             self.__set_attempt_date()
             result = self.__extract(processor, queue, playlist_index)
@@ -172,7 +184,7 @@ class Channel:
                     )
                 )
             if info.get("_type") == "playlist":
-                sub_channels = []
+                sub_channels: list[Channel] = []
                 if entries := list(info.get("entries") or []):
                     if self.__slot_index is not None:
                         queue.put(
@@ -183,28 +195,35 @@ class Channel:
                             )
                         )
                     for entry in entries:
-                        if isinstance(entry, dict) and (
-                            url := (entry.get("webpage_url") or entry.get("url"))
-                        ):
-                            sub_channels.append(
-                                Channel(
-                                    url,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    sub_level=self.__sub_level + 1,
-                                )
+                        if not (
+                            (
+                                self.__halt_event is not None
+                                and self.__halt_event.is_set()
                             )
+                            or self.__epoch_cutoff_passed
+                        ):
+                            if isinstance(entry, dict) and (
+                                url := (entry.get("webpage_url") or entry.get("url"))
+                            ):
+                                sub_channels.append(
+                                    Channel(
+                                        url,
+                                        None,
+                                        None,
+                                        None,
+                                        None,
+                                        sub_level=self.__sub_level + 1,
+                                    )
+                                )
                 if sub_channels:
                     for playlist_index, channel in enumerate(sub_channels, start=1):
                         channel.set_active()
+                        channel.assign_epoch_cutoff(self.get_epoch_cutoff())
                         channel.set_halt_event(self.__halt_event)
                         channel.download(
                             self.__slot_index, processor, queue, playlist_index
                         )
-            #                        if error := channel.get_last_error():
-            #                            self.__report_error(queue, f"{error}")
+                        self.assign_epoch_cutoff(channel.get_epoch_cutoff())
             else:
                 format = Item.enumerate_best_format(info)
                 if Item.no_vertical(format):
@@ -213,12 +232,22 @@ class Channel:
                 if not Item.high_resolution(format):
                     self.__report_error(queue, "Low resolution")
                     return False
-                if not Item.within_cutoff(info, self):
-                    self.__report_error(queue, "Outside cutoff")
-                    return False
                 if not Item.outside_deferred(info, format):
                     self.__report_error(queue, "Defer low resolution")
                     return False
+                if not Item.within_cutoff(info, self):
+                    self.__epoch_cutoff_passed = True
+                    self.__report_error(queue, "Outside cutoff")
+                    return False
+                else:
+                    if self.__slot_index is not None and self.__epoch_cutoff != 0:
+                        queue.put(
+                            CutoffMessage(
+                                index=self.__slot_index,
+                                provider=Message.Provider.CHANNEL,
+                                value=self.__epoch_cutoff,
+                            )
+                        )
                 process_time = int(time())
                 ret = self.__download(processor, info)
                 cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
@@ -237,8 +266,6 @@ class Channel:
                             return ret
                 return ret
         else:
-            # if not self.__last_error:
-            #    self.__report_error(queue, "Nothing to process")
             return False
         return True
 
@@ -270,7 +297,8 @@ class Channel:
 
     def __reset_epoch_cutoff(self):
         with Channel.__lock:
-            self.__epoch_cutoff = None
+            self.__epoch_cutoff = 0
+            self.__epoch_cutoff_passed = False
 
     def __set_error(self, message):
         with Channel.__lock:

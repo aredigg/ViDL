@@ -43,6 +43,11 @@ class CountMessage(SlotMessage):
 
 
 @dataclass
+class CutoffMessage(SlotMessage):
+    value: int
+
+
+@dataclass
 class PathMessage(SlotMessage):
     path: str
 

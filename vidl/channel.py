@@ -222,6 +222,16 @@ class Channel:
                             )
                             self.assign_epoch_cutoff(channel.get_epoch_cutoff())
             else:
+                format = Item.enumerate_best_format(info)
+                if Item.no_vertical(format):
+                    self.__report_error(queue, "Vertical video")
+                    return False
+                if not Item.high_resolution(format):
+                    self.__report_error(queue, "Low resolution")
+                    return False
+                if not Item.outside_deferred(info, format):
+                    self.__report_error(queue, "Defer low resolution")
+                    return False
                 if not Item.within_cutoff(info, self):
                     self.__epoch_cutoff_passed = True
                     self.__report_error(queue, "Outside cutoff")
@@ -235,16 +245,6 @@ class Channel:
                                 value=self.__epoch_cutoff,
                             )
                         )
-                format = Item.enumerate_best_format(info)
-                if Item.no_vertical(format):
-                    self.__report_error(queue, "Vertical video")
-                    return False
-                if not Item.high_resolution(format):
-                    self.__report_error(queue, "Low resolution")
-                    return False
-                if not Item.outside_deferred(info, format):
-                    self.__report_error(queue, "Defer low resolution")
-                    return False
                 process_time = int(time())
                 ret = self.__download(processor, info)
                 min_sleep = Config.settings["Download"]["sleep_interval"]

@@ -30,6 +30,9 @@ from .view import View
 class ViewController:
     index = 0
     UPDATES_PER_SECOND = 4
+    UPDATES_PER_SECOND = -(-UPDATES_PER_SECOND // len(View.ANIMATED)) * len(
+        View.ANIMATED
+    )
     RUN_LOOP_WAIT = 1 / UPDATES_PER_SECOND
 
     def __init__(self) -> None:
@@ -53,11 +56,6 @@ class ViewController:
             self.__ready = True
             completed = False
             while not self.__halt_event.is_set():
-                tacho = (
-                    (monotonic_ns() % 1_000_000_000)
-                    * ViewController.UPDATES_PER_SECOND
-                    // 1_000_000_000
-                )
                 try:
                     message: Message = self.__queue.get(
                         timeout=ViewController.RUN_LOOP_WAIT
@@ -68,21 +66,26 @@ class ViewController:
                     ...
                 if self.__redraw_required:
                     self.__redraw(terminal)
+                tacho = (
+                    (monotonic_ns() % 1_000_000_000)
+                    * ViewController.UPDATES_PER_SECOND
+                    // 1_000_000_000
+                )
                 if tacho == 0 and not completed:
                     title_bar = []
                     for view in self.__views.values():
-                        view.update(terminal)
+                        view.update(terminal, tacho)
                         if view.get_top_index() > 0:
                             title_bar.append(
                                 f"{view.get_top_index()}:{view.get_status().abbreviation()}{view.countdown()}"
                             )
                     terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
-                    terminal.flush()
                     completed = True
                 else:
                     completed = False
                     for view in self.__views.values():
-                        view.update_status(terminal)
+                        view.update_status(terminal, tacho)
+                terminal.flush()
 
     def __create_header(self) -> None:
         self.__views[View.HEADER] = View(header=True)
@@ -135,7 +138,10 @@ class ViewController:
             view = self.__views[message.index]
             view.set_timer(int(message.sleep_time + 1))
             if message.provider == Message.Provider.DOWNLOAD:
-                view.set_status(View.Status(View.Status.State.DOWNLOAD_WAIT))
+                if message.required:
+                    view.set_status(View.Status(View.Status.State.DOWNLOAD_REQ_WAIT))
+                else:
+                    view.set_status(View.Status(View.Status.State.DOWNLOAD_WAIT))
             elif message.provider == Message.Provider.CHANNEL:
                 view.reset()
                 view.set_status(
@@ -272,6 +278,14 @@ class ViewController:
                     )
                 )
             elif message.provider == Message.Provider.CHANNEL:
+                view.set_status(
+                    status=View.Status(
+                        View.Status.State.ERROR,
+                        provider=f"{message.target}",
+                        message=message.message,
+                    )
+                )
+            elif message.provider == Message.Provider.LOGGER:
                 view.set_status(
                     status=View.Status(
                         View.Status.State.ERROR,

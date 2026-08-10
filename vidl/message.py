@@ -35,6 +35,7 @@ class InitMessage(SlotMessage): ...
 @dataclass
 class SleepMessage(SlotMessage):
     sleep_time: float
+    required: bool = False
 
 
 @dataclass

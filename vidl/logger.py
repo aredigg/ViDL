@@ -14,7 +14,10 @@ from .message import (
 
 class Logger:
     BRACKET_PREFIX = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
-    MESSAGE_SLEEP = re.compile(r"Sleeping\s+(\d+(?:\.\d+)?)\s+seconds\s+\.\.\.")
+    MESSAGE_SLEEP = re.compile(r"Sleeping\s+(\d+(?:\.\d+)?)\s+seconds \.\.\.")
+    MESSAGE_SLEEP_ADS = re.compile(
+        r"Sleeping\s+(\d+(?:\.\d+)?)\s+seconds as required by the site\.\.\."
+    )
     MESSAGE_DOWNLOAD_PAGE = re.compile(
         r"([A-Za-z0-9_-]+)\s+page\s+(\d+): Downloading API JSON"
     )
@@ -67,15 +70,16 @@ class Logger:
         message = message.removeprefix("ERROR: ")
         self.__report_error(message)
         if provider is not None:
-            target, provider_message = self.__parse(provider_message)
-            self.__view_queue.put(
-                ErrorMessage(
-                    index=self.__slot_index,
-                    provider=Message.Provider.LOGGER,
-                    target=target or "",
-                    message=provider_message,
+            if not self.__parse_to_view(provider, provider_message):
+                target, provider_message = self.__parse(provider_message)
+                self.__view_queue.put(
+                    ErrorMessage(
+                        index=self.__slot_index,
+                        provider=Message.Provider.LOGGER,
+                        target=target or "",
+                        message=provider_message,
+                    )
                 )
-            )
             Debug.print(
                 f"ERR {self.__slot_index} --> {provider:>20.20} | {provider_message}"
             )
@@ -96,7 +100,7 @@ class Logger:
             return None, message
         return match.group(1), match.group(2)
 
-    def __parse_to_view(self, provider, message):
+    def __parse_to_view(self, provider, message) -> bool:
         provider_message = provider
         if provider == "download":
             provider = Message.Provider.DOWNLOAD
@@ -111,7 +115,7 @@ class Logger:
                     url=match,
                 )
             )
-            return
+            return True
 
         if match := self.__parse_prefix("Destination: ", message):
             self.__view_queue.put(
@@ -121,7 +125,7 @@ class Logger:
                     path=match,
                 )
             )
-            return
+            return True
 
         if match := self.__parse_suffix(
             ": has already been recorded in the archive", message
@@ -134,7 +138,7 @@ class Logger:
                     message="Already recorded",
                 )
             )
-            return
+            return True
 
         if match := self.__parse_suffix(": Downloading webpage", message):
             self.__view_queue.put(
@@ -145,7 +149,7 @@ class Logger:
                     message=provider_message,
                 )
             )
-            return
+            return True
 
         if match := self.__parse_suffix(": Downloading JSON metadata", message):
             self.__view_queue.put(
@@ -156,7 +160,7 @@ class Logger:
                     message=provider_message,
                 )
             )
-            return
+            return True
 
         if match := self.__parse_suffix(
             ": Join this channel to get access to members-only content like this video, and other exclusive perks.",
@@ -170,7 +174,7 @@ class Logger:
                     message="Join channel",
                 )
             )
-            return
+            return True
 
         match = Logger.MESSAGE_DOWNLOAD_PAGE.fullmatch(message)
         if match is not None:
@@ -182,7 +186,7 @@ class Logger:
                     message=provider_message,
                 )
             )
-            return
+            return True
 
         match = Logger.MESSAGE_RETRY_ERROR.fullmatch(message)
         if match is not None:
@@ -194,7 +198,7 @@ class Logger:
                     message=provider_message,
                 )
             )
-            return
+            return True
 
         match = Logger.MESSAGE_MEMBER_LEVEL.fullmatch(message)
         if match is not None:
@@ -206,7 +210,7 @@ class Logger:
                     message="Member level",
                 )
             )
-            return
+            return True
 
         match = Logger.MESSAGE_SLEEP.fullmatch(message)
         if match is not None:
@@ -220,7 +224,23 @@ class Logger:
                 )
             except ValueError:
                 ...
-            return
+            return True
+
+        match = Logger.MESSAGE_SLEEP_ADS.fullmatch(message)
+        if match is not None:
+            try:
+                self.__view_queue.put(
+                    SleepMessage(
+                        index=self.__slot_index,
+                        provider=provider,
+                        sleep_time=int(float(match.group(1))),
+                        required=True,
+                    )
+                )
+            except ValueError:
+                ...
+            return True
+        return False
 
     def __parse_prefix(self, prefix, message):
         if message.startswith(prefix):

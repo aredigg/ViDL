@@ -5,4 +5,4 @@
 - [ ] A common status bar in the header
 - [ ] Improving state transistion, not depending on Logger
 - [ ] Use more yt-dlp features than parsing log
-- [ ] Use mostly sleep outside yt-dlp
+- [x] Use mostly sleep outside yt-dlp

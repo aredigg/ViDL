@@ -383,9 +383,7 @@ class View:
         return self.__top_index
 
     def update_status(self, terminal: Terminal) -> None:
-        if self.__header:
-            ...
-        else:
+        if not self.__header:
             self.__status_line(terminal)
 
     def update(self, terminal: Terminal) -> None:
@@ -409,8 +407,24 @@ class View:
 
     def timer(self) -> str:
         if self.__timer is not None:
-            return Util.format_seconds(int(time()) - self.__timer)
+            match self.__status.state:
+                case View.Status.State.DOWNLOAD:
+                    return Util.format_seconds(max(0, int(time()) - self.__timer))
+                case View.Status.State.SLEEPING | View.Status.State.DOWNLOAD_WAIT:
+                    return Util.format_seconds(min(0, int(time()) - self.__timer))
+                case _:
+                    return Util.format_seconds(0)
         return "--:--"
+
+    def countdown(self) -> str:
+        seconds = 0
+        match self.__status.state:
+            case View.Status.State.SLEEPING | View.Status.State.DOWNLOAD_WAIT:
+                if self.__timer is not None:
+                    seconds = int(time()) - self.__timer
+            case View.Status.State.DOWNLOAD:
+                seconds = self.__smooth_remaining_time()
+        return f" {seconds}" if 0 < seconds < 10 else ""
 
     def set_top(self, name: str) -> None:
         self.__top = View.Top(name=name)

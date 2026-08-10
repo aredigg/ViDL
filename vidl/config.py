@@ -29,7 +29,7 @@ class Config:
             "minimum_duration": 0,
             "playlist_cutoff": 0,
             "resolution_defer": 0,
-            "sleep_interval": 60,
+            "sleep_interval": 120,
             "post_sleep_cutoff": 60,
         },
         "Debug": {
@@ -44,7 +44,7 @@ class Config:
         "live_from_start": False,
         "multistreams": True,
         "retries": 5,
-        "sleep_interval": 10,
+        "sleep_interval": 3,
         "max_sleep_interval": 10,
         "sleep_interval_requests": 1,
         "paths": {},

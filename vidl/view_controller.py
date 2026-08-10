@@ -1,7 +1,7 @@
 from functools import singledispatchmethod
 from queue import Empty, Queue
 from threading import Event, Thread
-from time import time
+from time import monotonic_ns, time
 
 from .ansi import ANSI
 from .hook import Hook
@@ -51,8 +51,13 @@ class ViewController:
             self.__create_header()
             self.__redraw(terminal)
             self.__ready = True
-            counter = ViewController.UPDATES_PER_SECOND
+            completed = False
             while not self.__halt_event.is_set():
+                tacho = (
+                    (monotonic_ns() % 1_000_000_000)
+                    * ViewController.UPDATES_PER_SECOND
+                    // 1_000_000_000
+                )
                 try:
                     message: Message = self.__queue.get(
                         timeout=ViewController.RUN_LOOP_WAIT
@@ -63,19 +68,19 @@ class ViewController:
                     ...
                 if self.__redraw_required:
                     self.__redraw(terminal)
-                counter -= 1
-                if counter == 0:
+                if tacho == 0 and not completed:
                     title_bar = []
                     for view in self.__views.values():
                         view.update(terminal)
                         if view.get_top_index() > 0:
                             title_bar.append(
-                                f"{view.get_top_index()}:{view.get_status().abbreviation()}"
+                                f"{view.get_top_index()}:{view.get_status().abbreviation()}{view.countdown()}"
                             )
                     terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
                     terminal.flush()
-                    counter = ViewController.UPDATES_PER_SECOND
+                    completed = True
                 else:
+                    completed = False
                     for view in self.__views.values():
                         view.update_status(terminal)
 
@@ -141,13 +146,17 @@ class ViewController:
                     )
                 )
             else:
-                view.set_status(
-                    View.Status(
-                        state=View.Status.State.PROCESS_WAIT,
-                        provider=view.get_status().provider,
-                        message=view.get_status().message,
+                if view.get_status().state not in (
+                    View.Status.State.ERROR,
+                    View.Status.State.WARNING,
+                ):
+                    view.set_status(
+                        View.Status(
+                            state=View.Status.State.PROCESS_WAIT,
+                            provider=view.get_status().provider,
+                            message=view.get_status().message,
+                        )
                     )
-                )
 
     @__dispatch_message.register
     def _(self, message: CountMessage):

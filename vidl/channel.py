@@ -196,11 +196,7 @@ class Channel:
                         )
                     for entry in entries:
                         if not (
-                            (
-                                self.__halt_event is not None
-                                and self.__halt_event.is_set()
-                            )
-                            or self.__epoch_cutoff_passed
+                            self.__halt_event is not None and self.__halt_event.is_set()
                         ):
                             if isinstance(entry, dict) and (
                                 url := (entry.get("webpage_url") or entry.get("url"))
@@ -217,24 +213,15 @@ class Channel:
                                 )
                 if sub_channels:
                     for playlist_index, channel in enumerate(sub_channels, start=1):
-                        channel.set_active()
-                        channel.assign_epoch_cutoff(self.get_epoch_cutoff())
-                        channel.set_halt_event(self.__halt_event)
-                        channel.download(
-                            self.__slot_index, processor, queue, playlist_index
-                        )
-                        self.assign_epoch_cutoff(channel.get_epoch_cutoff())
+                        if not self.__epoch_cutoff_passed:
+                            channel.set_active()
+                            channel.assign_epoch_cutoff(self.get_epoch_cutoff())
+                            channel.set_halt_event(self.__halt_event)
+                            channel.download(
+                                self.__slot_index, processor, queue, playlist_index
+                            )
+                            self.assign_epoch_cutoff(channel.get_epoch_cutoff())
             else:
-                format = Item.enumerate_best_format(info)
-                if Item.no_vertical(format):
-                    self.__report_error(queue, "Vertical video")
-                    return False
-                if not Item.high_resolution(format):
-                    self.__report_error(queue, "Low resolution")
-                    return False
-                if not Item.outside_deferred(info, format):
-                    self.__report_error(queue, "Defer low resolution")
-                    return False
                 if not Item.within_cutoff(info, self):
                     self.__epoch_cutoff_passed = True
                     self.__report_error(queue, "Outside cutoff")
@@ -248,10 +235,21 @@ class Channel:
                                 value=self.__epoch_cutoff,
                             )
                         )
+                format = Item.enumerate_best_format(info)
+                if Item.no_vertical(format):
+                    self.__report_error(queue, "Vertical video")
+                    return False
+                if not Item.high_resolution(format):
+                    self.__report_error(queue, "Low resolution")
+                    return False
+                if not Item.outside_deferred(info, format):
+                    self.__report_error(queue, "Defer low resolution")
+                    return False
                 process_time = int(time())
                 ret = self.__download(processor, info)
+                min_sleep = Config.settings["Download"]["sleep_interval"]
                 cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
-                sleep_time = min(cutoff, int(time()) - process_time)
+                sleep_time = max(min_sleep, min(cutoff, int(time()) - process_time))
                 if self.__slot_index is not None:
                     queue.put(
                         SleepMessage(

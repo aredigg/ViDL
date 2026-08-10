@@ -62,7 +62,6 @@ class Slot:
         settings = deepcopy(Config.ydl_settings)
         if cookie_browser := Config.settings["General"]["cookie_browser"]:
             settings["cookiesfrombrowser"] = (cookie_browser, None, None, None)
-        settings["max_sleep_interval"] = Config.settings["Download"]["sleep_interval"]
         settings["paths"]["home"] = Config.settings["Paths"]["output"]
         settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]
         if archived := Config.settings["Channels"]["archived"]:

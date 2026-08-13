@@ -19,7 +19,7 @@ def main(args) -> int:
     if Config.settings["Debug"]["active"]:
         Debug.activate()
     try:
-        with tempfile.TemporaryDirectory() as t:
+        with tempfile.TemporaryDirectory(prefix=".vidl-") as t:
             Config.settings["Paths"]["temporary"] = t
             coord = Coordinator()
             status = coord.run()

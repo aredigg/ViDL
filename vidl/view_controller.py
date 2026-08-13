@@ -77,7 +77,7 @@ class ViewController:
                         view.update(terminal, tacho)
                         if view.get_top_index() > 0:
                             title_bar.append(
-                                f"{view.get_top_index()}:{view.get_status().abbreviation()}{view.countdown()}"
+                                f"{view.get_top_index()} {view.get_status().emoji()}{view.countdown()}"
                             )
                     terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
                     completed = True

@@ -6,3 +6,4 @@
 - [ ] Improving state transistion, not depending on Logger
 - [ ] Use more yt-dlp features than parsing log
 - [x] Use mostly sleep outside yt-dlp
+- [ ] Metadata updating

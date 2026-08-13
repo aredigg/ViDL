@@ -17,11 +17,12 @@ class View:
     HEADER_HEIGHT = 5
     ROW_MIN_SIZE = 12
     COL_MIN_SIZE = 120
-    RING_SIZE = 50
+    RING_SIZE = 20
     NF_PREFIX = ""
     NF_SUFFIX = ""
     INVALID_TIIME = "--:-- "
     ANIMATED = ["○", "●", "○", "●"]
+    COUNTDOWN = ["   ", " 1 ", " 2 ", " 3 ", " 4 ", " 5 ", " 6 ", " 7 ", " 8 ", " 9 "]
 
     @dataclass
     class Status:
@@ -90,6 +91,29 @@ class View:
                 case self.State.ERROR:
                     return "ER"
 
+        def emoji(self) -> str:
+            match self.state:
+                case self.State.INACTIVE:
+                    return "⚫"
+                case self.State.WAITING:
+                    return "⏳"
+                case self.State.SLEEPING:
+                    return "💤"
+                case self.State.DOWNLOAD:
+                    return "🔴"
+                case self.State.DOWNLOAD_WAIT:
+                    return "⏸️"
+                case self.State.DOWNLOAD_REQ_WAIT:
+                    return "⏸️"
+                case self.State.PROCESS:
+                    return "🟢"
+                case self.State.PROCESS_WAIT:
+                    return "⏸️"
+                case self.State.WARNING:
+                    return "⚠️"
+                case self.State.ERROR:
+                    return "❗"
+
     @dataclass
     class Top:
         name: str = ""
@@ -120,6 +144,8 @@ class View:
         self.__bitrate_ring = deque(maxlen=View.RING_SIZE)
         self.__size_delta_ring = deque(maxlen=View.RING_SIZE)
         self.__time_delta_ring = deque(maxlen=View.RING_SIZE)
+        self.__previous_elapsed = None
+        self.__previous_size = None
         self.__item_entity: Item.Entity | None = None
         self.__item_progress: Item.Progress | None = None
         self.__item_media: Item.Media | None = None
@@ -350,6 +376,10 @@ class View:
                 self.__time_delta_ring.append(elapsed)
                 self.__size_delta_ring.append(size)
             else:
+                if self.__previous_elapsed is None:
+                    self.__previous_elapsed = elapsed
+                    self.__previous_size = size
+                    return 0, False
                 self.__time_delta_ring.append(elapsed - self.__time_delta_ring[-1])
                 self.__size_delta_ring.append(size - self.__size_delta_ring[-1])
                 elapsed_delta = sum(self.__time_delta_ring)
@@ -408,6 +438,8 @@ class View:
         self.__item_entity = None
         self.__item_progress = None
         self.__item_media = None
+        self.__previous_elapsed = None
+        self.__previous_size = None
         self.__bitrate_ring.clear()
         self.__size_delta_ring.clear()
         self.__time_delta_ring.clear()
@@ -455,12 +487,20 @@ class View:
     def countdown(self) -> str:
         seconds = 0
         match self.__status.state:
-            case View.Status.State.SLEEPING | View.Status.State.DOWNLOAD_WAIT:
+            case (
+                View.Status.State.SLEEPING
+                | View.Status.State.DOWNLOAD_WAIT
+                | View.Status.State.DOWNLOAD_REQ_WAIT
+            ):
                 if self.__timer is not None:
                     seconds = int(time()) - self.__timer
             case View.Status.State.DOWNLOAD:
                 seconds, _ = self.__smooth_remaining_time()
-        return f" {seconds}" if 0 < seconds < 10 else ""
+        return (
+            f" {View.COUNTDOWN[seconds]}"
+            if 0 < seconds < 10
+            else f" {View.COUNTDOWN[0]}"
+        )
 
     def set_top(self, name: str) -> None:
         self.__top = View.Top(name=name)

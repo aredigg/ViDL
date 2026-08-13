@@ -58,12 +58,12 @@ class Config:
         "writedescription": False,
         "writeinfojson": False,
         "hls_prefer_native": True,
+        "extractor-args": {
+            "youtube": {"player_client": ["default", "web_embedded", "-tv_downgraded"]},
+        },
         "external_downloader_args": {
             "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"]
         },
-        #        "postprocessor_args": {
-        #            "ffmpeg": ["-loglevel", "error", "-hide_banner", "-nostats"]
-        #        },
     }
 
     @staticmethod

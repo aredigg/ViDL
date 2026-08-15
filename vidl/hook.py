@@ -38,9 +38,10 @@ class Hook:
         self.__slot_index = slot_index
 
     def common(self, data):
-        Debug.print(
-            f"> HOOK {self.__slot_index} --> {Item.get_progress(data=data).process}: {Item.get_progress(data=data).status}"
-        )
+        if Item.get_progress(data=data).status != self.Status.DOWNLOADING:
+            Debug.print(
+                f"> HOOK {self.__slot_index} --> {Item.get_progress(data=data).process}: {Item.get_progress(data=data).status}"
+            )
         self.__view_queue.put(
             ProgressMessage(
                 index=self.__slot_index,

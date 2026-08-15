@@ -22,6 +22,7 @@ from .message import (
 
 class Channel:
     __lock = RLock()
+    __write_archive_lock = RLock()
     __header_columns = [
         "#",
         "URL",
@@ -224,9 +225,11 @@ class Channel:
             else:
                 format = Item.enumerate_best_format(info)
                 if Item.no_vertical(format):
+                    self.__record_archive(processor, info)
                     self.__report_error(queue, "Vertical video")
                     return False
                 if not Item.high_resolution(format):
+                    self.__record_archive(processor, info)
                     self.__report_error(queue, "Low resolution")
                     return False
                 if not Item.outside_deferred(info, format):
@@ -278,6 +281,12 @@ class Channel:
                 )
             )
         self.__set_error(message)
+
+    def __record_archive(self, processor: YoutubeDL, info):
+        if processor.params.get("download_archive"):
+            with Channel.__write_archive_lock:
+                if not processor.in_download_archive(info):
+                    processor.record_download_archive(info)
 
     def __download(self, processor, info):
         return (

@@ -151,7 +151,7 @@ class View:
         self.__item_media: Item.Media | None = None
 
     def __draw_header(self, terminal: Terminal) -> None:
-        line = "ViDL"
+        line = "𓃥  ViDL"
         if ANSI.len(line) < self.__size.cols - 10:
             terminal.print(line, 2, 10)
         if self.__status.message:
@@ -205,7 +205,7 @@ class View:
         )
 
     def __status_line(self, terminal: Terminal, sequence: int):
-        line = f"{self.__status.symbol(sequence)}  {self.timer()}"
+        line = f"  {self.__status.symbol(sequence)}  {self.timer()}"
         if self.__status.state == View.Status.State.DOWNLOAD:
             if self.__item_progress is not None:
                 if self.__item_progress.size_total:
@@ -231,9 +231,6 @@ class View:
                         length, self.__item_progress.percent, "━"
                     )
                     line = line + "/ " + remaining_string + " " + meter + "  " + eta
-                    terminal.print(
-                        line, self.__size.origin_row + 2, self.__size.origin_col + 6
-                    )
                 elif self.__item_progress.size_current:
                     size = int(self.__item_progress.size_current) >> 20
                     line = line + " " + f"{size:>6} MB"
@@ -248,16 +245,16 @@ class View:
                                 >> 10
                             )
                             line = line + " " + f"{bitrate:>6} kbps"
-                    line_len = ANSI.len(line)
-                    if line_len < self.__size.cols - 10:
-                        line = line + " " * (self.__size.cols - 10 - line_len)
-                        terminal.print(
-                            line,
-                            self.__size.origin_row + 2,
-                            self.__size.origin_col + 6,
-                        )
         else:
             if self.__status.provider or self.__status.message:
+                provider = self.__status.provider
+                message = self.__status.message
+                if (len(provider) + len(message)) > (self.__size.cols - 14):
+                    provider_len = self.__size.cols - 14 - len(message)
+                    if provider_len > 0:
+                        provider = ANSI.trim(provider, provider_len)
+                    else:
+                        provider = ""
                 color = ""
                 if self.__status.state == View.Status.State.ERROR:
                     color = ANSI.Color.Cerise
@@ -270,12 +267,7 @@ class View:
                     + f"  {self.__status.provider}: "
                     + f"{color}{self.__status.message}{ANSI.Color.DefaultFg}"
                 )
-            line_len = ANSI.len(line)
-            if line_len < self.__size.cols - 10:
-                line = line + " " * (self.__size.cols - 10 - line_len)
-                terminal.print(
-                    line, self.__size.origin_row + 2, self.__size.origin_col + 6
-                )
+        self.__print(terminal, 2, line)
 
     def __item_line(self, terminal: Terminal):
         if self.__item_entity is not None:

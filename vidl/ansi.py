@@ -10,6 +10,8 @@ class ANSI:
 
     ClearScreen = "\x1b[0m\x1b[2J"
 
+    Reset = "\x1b[0m"
+
     Inverse = "\x1b[7m"
     InverseReset = "\x1b[27m"
 
@@ -85,6 +87,7 @@ class ANSI:
             else:
                 width = Unicode.len(string[pos])
                 if out_length + width > length:
+                    out.append(ANSI.Reset)
                     break
                 out.append(string[pos])
                 out_length += width

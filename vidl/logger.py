@@ -1,15 +1,6 @@
 import re
 
 from .debug import Debug
-from .message import (
-    ErrorMessage,
-    InfoMessage,
-    Message,
-    PathMessage,
-    SleepMessage,
-    UrlMessage,
-    WarningMessage,
-)
 
 
 class Logger:
@@ -30,15 +21,14 @@ class Logger:
         r"to members-only content and other exclusive perks\."
     )
 
-    def __init__(self, view_queue, slot_index, report_error) -> None:
-        self.__view_queue = view_queue
+    def __init__(self, slot_index, report_error) -> None:
+        # self.__view_queue = view_queue
         self.__slot_index = slot_index
         self.__report_error = report_error
 
     def debug(self, message):
         provider, provider_message = self.__parse(message)
         if provider is not None:
-            self.__parse_to_view(provider, provider_message)
             Debug.print(
                 f"DBG {self.__slot_index} --> {provider:>20.20} | {provider_message}"
             )
@@ -48,7 +38,6 @@ class Logger:
     def info(self, message):
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
         if provider is not None:
-            self.__parse_to_view(provider, provider_message)
             Debug.print(
                 f"INF {self.__slot_index} --> {provider:>20.20} | {provider_message}"
             )
@@ -58,7 +47,6 @@ class Logger:
     def warning(self, message):
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
         if provider is not None:
-            self.__parse_to_view(provider, provider_message)
             Debug.print(
                 f"WRN {self.__slot_index} --> {provider:>20.20} | {provider_message}"
             )
@@ -70,28 +58,10 @@ class Logger:
         message = message.removeprefix("ERROR: ")
         self.__report_error(message)
         if provider is not None:
-            if not self.__parse_to_view(provider, provider_message):
-                target, provider_message = self.__parse(provider_message)
-                self.__view_queue.put(
-                    ErrorMessage(
-                        index=self.__slot_index,
-                        provider=Message.Provider.LOGGER,
-                        target=target or "",
-                        message=provider_message,
-                    )
-                )
             Debug.print(
                 f"ERR {self.__slot_index} --> {provider:>20.20} | {provider_message}"
             )
         else:
-            self.__view_queue.put(
-                ErrorMessage(
-                    index=self.__slot_index,
-                    provider=Message.Provider.LOGGER,
-                    target="",
-                    message=message,
-                )
-            )
             Debug.print(f"ERR {self.__slot_index} --> {message}")
 
     def __parse(self, message):
@@ -100,147 +70,145 @@ class Logger:
             return None, message
         return match.group(1), match.group(2)
 
-    def __parse_to_view(self, provider, message) -> bool:
-        provider_message = provider
-        if provider == "download":
-            provider = Message.Provider.DOWNLOAD
-        else:
-            provider = Message.Provider.LOGGER
+    # def __parse_to_view_old(self, provider, message) -> bool:
+    #     provider_message = provider
+    #     if provider == "download":
+    #         provider = Message.Provider.DOWNLOAD
 
-        if match := self.__parse_prefix("Extracting URL: ", message):
-            self.__view_queue.put(
-                UrlMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    url=match,
-                )
-            )
-            return True
+    #     if match := self.__parse_prefix("Extracting URL: ", message):
+    #         self.__view_queue.put(
+    #             UrlMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 url=match,
+    #             )
+    #         )
+    #         return True
 
-        if match := self.__parse_prefix("Destination: ", message):
-            self.__view_queue.put(
-                PathMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    path=match,
-                )
-            )
-            return True
+    #     if match := self.__parse_prefix("Destination: ", message):
+    #         self.__view_queue.put(
+    #             PathMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 path=match,
+    #             )
+    #         )
+    #         return True
 
-        if match := self.__parse_suffix(
-            ": has already been recorded in the archive", message
-        ):
-            self.__view_queue.put(
-                WarningMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    target=match,
-                    message="Already recorded",
-                )
-            )
-            return True
+    #     if match := self.__parse_suffix(
+    #         ": has already been recorded in the archive", message
+    #     ):
+    #         self.__view_queue.put(
+    #             WarningMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 target=match,
+    #                 message="Already recorded",
+    #             )
+    #         )
+    #         return True
 
-        if match := self.__parse_suffix(": Downloading webpage", message):
-            self.__view_queue.put(
-                InfoMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    target=match,
-                    message=provider_message,
-                )
-            )
-            return True
+    #     if match := self.__parse_suffix(": Downloading webpage", message):
+    #         self.__view_queue.put(
+    #             InfoMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 target=match,
+    #                 message=provider_message,
+    #             )
+    #         )
+    #         return True
 
-        if match := self.__parse_suffix(": Downloading JSON metadata", message):
-            self.__view_queue.put(
-                InfoMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    target=match,
-                    message=provider_message,
-                )
-            )
-            return True
+    #     if match := self.__parse_suffix(": Downloading JSON metadata", message):
+    #         self.__view_queue.put(
+    #             InfoMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 target=match,
+    #                 message=provider_message,
+    #             )
+    #         )
+    #         return True
 
-        if match := self.__parse_suffix(
-            ": Join this channel to get access to members-only content like this video, and other exclusive perks.",
-            message,
-        ):
-            self.__view_queue.put(
-                ErrorMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    target=match,
-                    message="Join channel",
-                )
-            )
-            return True
+    #     if match := self.__parse_suffix(
+    #         ": Join this channel to get access to members-only content like this video, and other exclusive perks.",
+    #         message,
+    #     ):
+    #         self.__view_queue.put(
+    #             ErrorMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 target=match,
+    #                 message="Join channel",
+    #             )
+    #         )
+    #         return True
 
-        match = Logger.MESSAGE_DOWNLOAD_PAGE.fullmatch(message)
-        if match is not None:
-            self.__view_queue.put(
-                InfoMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    target=match.group(1),
-                    message=provider_message,
-                )
-            )
-            return True
+    #     match = Logger.MESSAGE_DOWNLOAD_PAGE.fullmatch(message)
+    #     if match is not None:
+    #         self.__view_queue.put(
+    #             InfoMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 target=match.group(1),
+    #                 message=provider_message,
+    #             )
+    #         )
+    #         return True
 
-        match = Logger.MESSAGE_RETRY_ERROR.fullmatch(message)
-        if match is not None:
-            self.__view_queue.put(
-                InfoMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    target=f"Retry {int(match.group(3))}/{int(match.group(4))}",
-                    message=provider_message,
-                )
-            )
-            return True
+    #     match = Logger.MESSAGE_RETRY_ERROR.fullmatch(message)
+    #     if match is not None:
+    #         self.__view_queue.put(
+    #             InfoMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 target=f"Retry {int(match.group(3))}/{int(match.group(4))}",
+    #                 message=provider_message,
+    #             )
+    #         )
+    #         return True
 
-        match = Logger.MESSAGE_MEMBER_LEVEL.fullmatch(message)
-        if match is not None:
-            self.__view_queue.put(
-                ErrorMessage(
-                    index=self.__slot_index,
-                    provider=provider,
-                    target=match.group(1),
-                    message="Member level",
-                )
-            )
-            return True
+    #     match = Logger.MESSAGE_MEMBER_LEVEL.fullmatch(message)
+    #     if match is not None:
+    #         self.__view_queue.put(
+    #             ErrorMessage(
+    #                 index=self.__slot_index,
+    #                 provider=provider,
+    #                 target=match.group(1),
+    #                 message="Member level",
+    #             )
+    #         )
+    #         return True
 
-        match = Logger.MESSAGE_SLEEP.fullmatch(message)
-        if match is not None:
-            try:
-                self.__view_queue.put(
-                    SleepMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        sleep_time=int(float(match.group(1))),
-                    )
-                )
-            except ValueError:
-                ...
-            return True
+    #     match = Logger.MESSAGE_SLEEP.fullmatch(message)
+    #     if match is not None:
+    #         try:
+    #             self.__view_queue.put(
+    #                 SleepMessage(
+    #                     index=self.__slot_index,
+    #                     provider=provider,
+    #                     sleep_time=int(float(match.group(1))),
+    #                 )
+    #             )
+    #         except ValueError:
+    #             ...
+    #         return True
 
-        match = Logger.MESSAGE_SLEEP_ADS.fullmatch(message)
-        if match is not None:
-            try:
-                self.__view_queue.put(
-                    SleepMessage(
-                        index=self.__slot_index,
-                        provider=provider,
-                        sleep_time=int(float(match.group(1))),
-                        required=True,
-                    )
-                )
-            except ValueError:
-                ...
-            return True
-        return False
+    #     match = Logger.MESSAGE_SLEEP_ADS.fullmatch(message)
+    #     if match is not None:
+    #         try:
+    #             self.__view_queue.put(
+    #                 SleepMessage(
+    #                     index=self.__slot_index,
+    #                     provider=provider,
+    #                     sleep_time=int(float(match.group(1))),
+    #                     required=True,
+    #                 )
+    #             )
+    #         except ValueError:
+    #             ...
+    #         return True
+    #     return False
 
     def __parse_prefix(self, prefix, message):
         if message.startswith(prefix):

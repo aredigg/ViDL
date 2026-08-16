@@ -5,17 +5,22 @@ from datetime import datetime
 from threading import RLock
 from time import time
 
+from yt_dlp.utils import DownloadError, ExtractorError
 from yt_dlp.YoutubeDL import YoutubeDL
 
 from .config import Config
+from .debug import Debug
+from .error import Error
 from .item import Item
 from .message import (
     CountMessage,
     CutoffMessage,
     EntityMessage,
     ErrorMessage,
+    InfoMessage,
     MediaMessage,
     Message,
+    PathMessage,
     SleepMessage,
 )
 
@@ -68,6 +73,7 @@ class Channel:
     ) -> None:
         self.__name = name
         self.__url = url
+        self.__id = None
         try:
             self.__last_download_date = int(last_dl_dte)
             self.__last_attempt_date = int(last_at_dte)
@@ -155,13 +161,19 @@ class Channel:
             return False
         if self.__url is None or self.__url == "None":
             self.__url = self.__name
-        if info := processor.extract_info(self.__url, download=False, process=False):
+        try:
+            info = processor.extract_info(self.__url, download=False, process=False)
+        except DownloadError as e:
+            self.__handle_error_exception(queue, e)
+            return False
+        if info:
             self.__name = (
                 info.get("title")
                 or info.get("channel")
                 or info.get("uploader")
                 or f"{info.get('extractor')} ({info.get('id')})"
             )
+            self.__id = info.get("id")
 
             if self.__slot_index is not None:
                 queue.put(
@@ -170,7 +182,9 @@ class Channel:
                         provider=Message.Provider.CHANNEL,
                         entity=Item.get_entity(
                             info=info,
-                            name=self.__name if self.__sub_level == 0 else "",
+                            name=(info.get("channel") or self.__name)
+                            if self.__sub_level == 0
+                            else "",
                             index=playlist_index,
                         ),
                     )
@@ -185,6 +199,18 @@ class Channel:
                     )
                 )
             if info.get("_type") == "playlist":
+                if self.__slot_index is not None:
+                    queue.put(
+                        InfoMessage(
+                            index=self.__slot_index,
+                            provider=Message.Provider.CHANNEL,
+                            target=self.__name,
+                            message=info.get("extractor_key")
+                            or info.get("extractor")
+                            or "Playlist",
+                        )
+                    )
+
                 sub_channels: list[Channel] = []
                 if entries := list(info.get("entries") or []):
                     if self.__slot_index is not None:
@@ -248,8 +274,27 @@ class Channel:
                                 value=self.__epoch_cutoff,
                             )
                         )
+                if self.__slot_index is not None:
+                    queue.put(
+                        PathMessage(
+                            index=self.__slot_index,
+                            provider=Message.Provider.DOWNLOAD,
+                            path=processor.prepare_filename(info, "temp"),
+                        )
+                    )
+                sleep_time = (format.get("available_at") or time()) - time()
+                sleep_time = max(Config.SLEEP_INTERVAL, sleep_time + 1)
+                if self.__slot_index is not None:
+                    queue.put(
+                        SleepMessage(
+                            index=self.__slot_index,
+                            provider=Message.Provider.DOWNLOAD,
+                            sleep_time=sleep_time,
+                            required=sleep_time > Config.SLEEP_INTERVAL,
+                        )
+                    )
                 process_time = int(time())
-                ret = self.__download(processor, info)
+                ret = self.__download(processor, queue, info)
                 min_sleep = Config.settings["Download"]["sleep_interval"]
                 cutoff = Config.settings["Download"]["post_sleep_cutoff"] * 60
                 sleep_time = max(min_sleep, min(cutoff, int(time()) - process_time))
@@ -270,13 +315,37 @@ class Channel:
             return False
         return True
 
-    def __report_error(self, queue, message):
+    def __download(self, processor, queue, info):
+        try:
+            return (
+                processor.download(
+                    [info.get("original_url") or info.get("webpage_url")]
+                )
+                == 0
+            )
+        except DownloadError as e:
+            self.__handle_error_exception(queue, e)
+            return False
+
+    def __handle_error_exception(self, queue, e):
+        real = None
+        if e.exc_info is not None:
+            real = e.exc_info[1]
+        if isinstance(real, ExtractorError):
+            error = Error(str(real.cause or real))
+            self.__report_error(queue, error.message, real.video_id)
+        else:
+            error = Error(str(e))
+            self.__report_error(queue, error.message, error.identity)
+        Debug.print(str(e))
+
+    def __report_error(self, queue, message, target=None):
         if self.__slot_index is not None:
             queue.put(
                 ErrorMessage(
                     index=self.__slot_index,
                     provider=Message.Provider.CHANNEL,
-                    target=self.__name,
+                    target=(self.__id or self.__name) if target is None else target,
                     message=message,
                 )
             )
@@ -287,12 +356,6 @@ class Channel:
             with Channel.__write_archive_lock:
                 if not processor.in_download_archive(info):
                     processor.record_download_archive(info)
-
-    def __download(self, processor, info):
-        return (
-            processor.download([info.get("original_url") or info.get("webpage_url")])
-            == 0
-        )
 
     def __set_attempt_date(self):
         with Channel.__lock:

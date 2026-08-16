@@ -66,9 +66,7 @@ class Slot:
         settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]
         if archived := Config.settings["Channels"]["archived"]:
             settings["download_archive"] = archived
-        settings["logger"] = Logger(
-            self.__view_queue, self.__index, channel.report_error
-        )
+        settings["logger"] = Logger(self.__index, channel.report_error)
         settings["progress_hooks"] = [hook.common]
         settings["postprocessor_hooks"] = [hook.common]
 

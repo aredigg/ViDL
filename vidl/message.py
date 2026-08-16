@@ -10,7 +10,6 @@ class Message:
         CHANNEL = "channel"
         DOWNLOAD = "download"
         HOOK = "hook"
-        LOGGER = "logger"
         SLOT = "slot"
 
 

@@ -107,7 +107,7 @@ class Item:
         subtitle_stat = "/".join(subtitles)
         return Item.Media(
             length=info.get("duration") or 0,
-            extension=(info.get("ext") or "---").upper(),
+            extension=(info.get("ext") or "---"),
             video_stat=video_stat,
             audio_stat=audio_stat,
             subtitle_stat=subtitle_stat,

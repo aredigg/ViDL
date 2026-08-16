@@ -181,8 +181,6 @@ class ViewController:
         if message.index in self.__views:
             view = self.__views[message.index]
             view.set_filepath(message.path)
-            if message.provider == Message.Provider.DOWNLOAD:
-                view.set_status(View.Status(View.Status.State.DOWNLOAD))
 
     @__dispatch_message.register
     def _(self, message: UrlMessage):
@@ -214,7 +212,12 @@ class ViewController:
                         message.progress.status.lower()
                         == Hook.Status.DOWNLOADING.value.lower()
                     ):
-                        view.set_status(View.Status(View.Status.State.DOWNLOAD))
+                        if view.get_status().state in (
+                            View.Status.State.DOWNLOAD_WAIT,
+                            View.Status.State.DOWNLOAD_REQ_WAIT,
+                        ):
+                            view.set_timer(0)
+                            view.set_status(View.Status(View.Status.State.DOWNLOAD))
                 else:
                     if message.progress.status == Hook.Status.STARTED.value:
                         view.set_status(
@@ -246,8 +249,8 @@ class ViewController:
             view.set_status(
                 status=View.Status(
                     View.Status.State.PROCESS,
-                    provider=message.message,
-                    message=message.target,
+                    provider=message.target,
+                    message=message.message,
                 )
             )
 
@@ -278,14 +281,6 @@ class ViewController:
                     )
                 )
             elif message.provider == Message.Provider.CHANNEL:
-                view.set_status(
-                    status=View.Status(
-                        View.Status.State.ERROR,
-                        provider=f"{message.target}",
-                        message=message.message,
-                    )
-                )
-            elif message.provider == Message.Provider.LOGGER:
                 view.set_status(
                     status=View.Status(
                         View.Status.State.ERROR,

@@ -60,7 +60,9 @@ class View:
                 case self.State.DOWNLOAD_REQ_WAIT:
                     return ANSI.Color.Cerise + View.ANIMATED[seq] + ANSI.Color.DefaultFg
                 case self.State.PROCESS:
-                    return ANSI.Color.PineGreen + "●" + ANSI.Color.DefaultFg
+                    return (
+                        ANSI.Color.PineGreen + View.ANIMATED[seq] + ANSI.Color.DefaultFg
+                    )
                 case self.State.PROCESS_WAIT:
                     return ANSI.Color.PineGreen + "○" + ANSI.Color.DefaultFg
                 case self.State.WARNING:
@@ -315,7 +317,7 @@ class View:
         if self.__item_media is not None:
             line = (
                 " " * OFFSET
-                + f"│ {Util.format_seconds(self.__item_media.length, two_parts=False)} {self.__item_media.extension} "
+                + f"│ {Util.format_seconds(self.__item_media.length, two_parts=False)} {self.__item_media.extension.upper()} "
             )
             if self.__item_progress is not None and self.__item_entity is not None:
                 line += f"{self.__item_entity.stream} ({self.__item_entity.age_limit}) "
@@ -394,10 +396,21 @@ class View:
 
     def __update_filesize(self) -> None:
         size_current = 0
-        if self.__temp_filepath is not None:
-            for filename in [self.__temp_filepath, self.__temp_filepath + ".part"]:
+        if self.__temp_filepath is not None and self.__item_media is not None:
+            temp_filepath = (
+                self.__temp_filepath.removesuffix("NA") + self.__item_media.extension
+            )
+            for filename in [temp_filepath, temp_filepath + ".part"]:
                 try:
                     size_current = os.path.getsize(filename)
+                    match self.__status.state:
+                        case (
+                            View.Status.State.DOWNLOAD_WAIT
+                            | View.Status.State.DOWNLOAD_REQ_WAIT
+                        ):
+                            self.__status.state = View.Status.State.DOWNLOAD
+                        case _:
+                            ...
                 except OSError:
                     ...
         if self.__item_progress is None:
@@ -470,7 +483,11 @@ class View:
             match self.__status.state:
                 case View.Status.State.DOWNLOAD:
                     return Util.format_seconds(max(0, int(time()) - self.__timer))
-                case View.Status.State.SLEEPING | View.Status.State.DOWNLOAD_WAIT:
+                case (
+                    View.Status.State.SLEEPING
+                    | View.Status.State.DOWNLOAD_WAIT
+                    | View.Status.State.DOWNLOAD_REQ_WAIT
+                ):
                     return Util.format_seconds(min(0, int(time()) - self.__timer))
                 case _:
                     return Util.format_seconds(0)

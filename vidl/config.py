@@ -5,6 +5,7 @@ import sys
 
 
 class Config:
+    SLEEP_INTERVAL = 3
     path = os.path.abspath(os.path.curdir)
     ini = "config.ini"
 
@@ -40,13 +41,13 @@ class Config:
 
     ydl_settings = {
         "color": "no_color",
-        "ignoreerrors": True,
+        "ignoreerrors": False,
         "noprogress": True,
         "live_from_start": False,
         "allow_multiple_audio_streams": True,
         "retries": 5,
-        "sleep_interval": 3,
-        "max_sleep_interval": 6,
+        "sleep_interval": SLEEP_INTERVAL,
+        "max_sleep_interval": SLEEP_INTERVAL,
         "sleep_interval_requests": 1,
         "paths": {},
         "outtmpl": "%(channel)s/%(timestamp>%Y-%m)s/%(id)s.%(ext)s",

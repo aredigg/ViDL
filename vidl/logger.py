@@ -1,4 +1,5 @@
 import re
+from collections.abc import Callable
 
 from .debug import Debug
 
@@ -21,7 +22,7 @@ class Logger:
         r"This video is available to this channel's members on level: (.+?) \(or any higher level\)\. Join this channel to get access to members-only content and other exclusive perks\."
     )
 
-    def __init__(self, slot_index: int, report_error) -> None:
+    def __init__(self, slot_index: int, report_error: Callable[[str], None]) -> None:
         # self.__view_queue = view_queue
         self.__slot_index = slot_index
         self.__report_error = report_error
@@ -64,7 +65,7 @@ class Logger:
         else:
             Debug.print(f"ERR {self.__slot_index} --> {message}")
 
-    def __parse(self, message):
+    def __parse(self, message: str) -> tuple[str | None, str]:
         match = Logger.BRACKET_PREFIX.match(message)
         if match is None:
             return None, message

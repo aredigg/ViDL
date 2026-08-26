@@ -41,7 +41,7 @@ class Hook:
         self.__halt_event: Event = halt_event
         self.__slot_index = slot_index
 
-    def common(self, data):
+    def common(self, data: dict[str, object]):
         if Item.get_progress(data=data).status != self.Status.DOWNLOADING.value:
             Debug.print(
                 f"> HOOK {self.__slot_index} --> {Item.get_progress(data=data).process}: {Item.get_progress(data=data).status}"
@@ -57,7 +57,7 @@ class Hook:
             MediaMessage(
                 index=self.__slot_index,
                 provider=Message.Provider.HOOK,
-                media=Item.get_media(info=data.get("info_dict") or {}),
+                media=Item.get_media(info=Item.get_dct(data, "info_dict")),
             )
         )
 

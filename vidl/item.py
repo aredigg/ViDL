@@ -172,8 +172,8 @@ class Item:
     @staticmethod
     def high_resolution(info: dict[str, object]) -> bool:
         height = Item.get_int(info, "height")
-        if minimum_resolution := int(
-            Config.settings["Download"]["minimum_resolution"] or 0
+        if minimum_resolution := cast(
+            int, Config.settings["Download"]["minimum_resolution"] or 0
         ):
             return height == 0 or height >= minimum_resolution
         return True
@@ -182,7 +182,7 @@ class Item:
     def outside_deferred(info: dict[str, object], format: dict[str, object]):
         height = Item.get_int(format, "height")
         timestamp = Item.get_int(info, "timestamp")
-        if defer := int(Config.settings["Download"]["resolution_defer"] or 0):
+        if defer := cast(int, Config.settings["Download"]["resolution_defer"] or 0):
             return timestamp < (int(time()) - defer * 86_400) or height > 2000
         return True
 

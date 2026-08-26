@@ -28,7 +28,7 @@ from .view import View
 
 
 class ViewController:
-    index = 0
+    index: int = 0
     UPDATES_PER_SECOND: int = 4
     updates_per_second: int = -(-UPDATES_PER_SECOND // len(View.ANIMATED)) * len(
         View.ANIMATED
@@ -72,7 +72,7 @@ class ViewController:
                     // 1_000_000_000
                 )
                 if tacho == 0 and not completed:
-                    title_bar = []
+                    title_bar: list[str] = []
                     for view in self.__views.values():
                         view.update(terminal, tacho)
                         if view.get_top_index() > 0:
@@ -95,17 +95,17 @@ class ViewController:
         terminal.clear()
         char_rows, char_cols = terminal.get_size()
         # Set header size
-        self.__views[View.HEADER].resize(rows=View.HEADER_HEIGHT, cols=char_cols)
+        _ = self.__views[View.HEADER].resize(rows=View.HEADER_HEIGHT, cols=char_cols)
         # Calculate and set each views size and positions
         view_rows = max(1, (char_rows - View.HEADER_HEIGHT) // View.ROW_MIN_SIZE)
         view_cols = max(1, (char_cols - 1) // View.COL_MIN_SIZE)
         view_col_size = char_cols // view_cols
-        slots = iter(sorted(slot for slot in self.__views.keys() if slot >= 0))
+        slots = iter(sorted(slot for slot in self.__views if slot >= 0))
         for row in range(view_rows):
             for col in range(view_cols):
                 try:
                     slot = next(slots)
-                    self.__views[slot].resize(
+                    _ = self.__views[slot].resize(
                         origin_row=row * View.ROW_MIN_SIZE + View.HEADER_HEIGHT,
                         origin_col=col * view_col_size + 1,
                         rows=View.ROW_MIN_SIZE,
@@ -115,7 +115,7 @@ class ViewController:
                     return
 
     @singledispatchmethod
-    def __dispatch_message(self, message):
+    def __dispatch_message(self, message: str) -> None:
         raise NotImplementedError(
             f"Message type {type(message).__name__} not implemented"
         )
@@ -129,7 +129,7 @@ class ViewController:
             self.__redraw_required = True
 
     @__dispatch_message.register
-    def _(self, message: RedrawMessage):
+    def _(self, _message: RedrawMessage):
         self.__redraw_required = True
 
     @__dispatch_message.register
@@ -148,7 +148,7 @@ class ViewController:
                     status=View.Status(
                         View.Status.State.SLEEPING,
                         provider="Sleeping",
-                        message=f"ETA {Util.get_time(int(time()) + message.sleep_time)}",
+                        message=f"ETA {Util.get_time(int(time() + message.sleep_time))}",
                     )
                 )
             else:
@@ -194,9 +194,8 @@ class ViewController:
         if message.index in self.__views:
             view = self.__views[message.index]
             view.set_item_entity(message.entity)
-            if message.provider == Message.Provider.CHANNEL:
-                if message.entity.top_name:
-                    view.set_top(message.entity.top_name)
+            if message.provider == Message.Provider.CHANNEL and message.entity.top_name:
+                view.set_top(message.entity.top_name)
 
     @__dispatch_message.register
     def _(self, message: ProgressMessage):
@@ -211,13 +210,12 @@ class ViewController:
                     if (
                         message.progress.status.lower()
                         == Hook.Status.DOWNLOADING.value.lower()
+                    ) and view.get_status().state in (
+                        View.Status.State.DOWNLOAD_WAIT,
+                        View.Status.State.DOWNLOAD_REQ_WAIT,
                     ):
-                        if view.get_status().state in (
-                            View.Status.State.DOWNLOAD_WAIT,
-                            View.Status.State.DOWNLOAD_REQ_WAIT,
-                        ):
-                            view.set_timer(0)
-                            view.set_status(View.Status(View.Status.State.DOWNLOAD))
+                        view.set_timer(0)
+                        view.set_status(View.Status(View.Status.State.DOWNLOAD))
                 else:
                     if message.progress.status == Hook.Status.STARTED.value:
                         view.set_status(

@@ -1,7 +1,8 @@
+from collections.abc import Callable
 from copy import deepcopy
 from queue import Queue
 from threading import Event, Lock, Thread
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from yt_dlp import YoutubeDL
 
@@ -11,14 +12,11 @@ from .hook import DownloadCancelled, Hook
 from .logger import Logger
 from .message import InitMessage, Message
 
-if TYPE_CHECKING:
-    from yt_dlp import _Params
-
 
 class Slot:
     processor_lock: Lock = Lock()
 
-    def __init__(self, index: int, view_queue) -> None:
+    def __init__(self, index: int, view_queue: Queue[Message]) -> None:
         self.__index = index
         self.__view_queue: Queue[Message] = view_queue
         self.__channel = None
@@ -61,18 +59,19 @@ class Slot:
 
     def __setup(self, channel: Channel):
         hook = Hook(self.__view_queue, self.__halt_event, self.__index)
-        settings = deepcopy(Config.ydl_settings)
+        settings: dict[str, object] = deepcopy(Config.ydl_settings)
         if cookie_browser := Config.settings["General"]["cookie_browser"]:
             settings["cookiesfrombrowser"] = (cookie_browser, None, None, None)
-        settings["paths"]["home"] = Config.settings["Paths"]["output"]
-        settings["paths"]["temp"] = Config.settings["Paths"]["temporary"]
+        settings["paths"] = {
+            "home": cast(str, Config.settings["Paths"]["output"]),
+            "temp": cast(str, Config.settings["Paths"]["temporary"]),
+        }
         if archived := Config.settings["Channels"]["archived"]:
             settings["download_archive"] = archived
         settings["logger"] = Logger(self.__index, channel.report_error)
         settings["progress_hooks"] = [hook.common]
         settings["postprocessor_hooks"] = [hook.common]
-
-        return YoutubeDL(cast("_Params", dict(settings)))
+        return cast(Callable[[dict[str, object]], YoutubeDL], YoutubeDL)(settings)
 
     def halt(self):
         self.__ready = False

@@ -1,6 +1,8 @@
 from queue import Empty
 from signal import SIGTERM, SIGWINCH, signal
 from time import sleep
+from types import FrameType
+from typing import cast
 
 from .channel import Channel, ChannelHelper
 from .config import Config
@@ -29,11 +31,12 @@ class Coordinator:
             self.__error = e
             self.__running = False
         number_of_slots = min(
-            max(1, int(Config.settings["Channels"]["slots"] or 0)), len(self.__channels)
+            max(1, cast(int, Config.settings["Channels"]["slots"] or 0)),
+            len(self.__channels),
         )
         self.__slots = [Slot(i, self.__view_queue) for i in range(number_of_slots)]
-        _ = signal(SIGTERM, lambda *_: self.halt())
-        _ = signal(SIGWINCH, lambda *_: self.redraw())
+        _ = signal(SIGTERM, self.halt)
+        _ = signal(SIGWINCH, self.redraw)
 
     def __save_channels(self):
         ret = ChannelHelper.save_channels(
@@ -96,11 +99,11 @@ class Coordinator:
         except Empty:
             return
         if key in ("q", "Q", "\x03", "\x04"):
-            self.halt()
+            self.halt(0, None)
 
-    def halt(self):
+    def halt(self, _signum: int, _frame: FrameType | None) -> None:
         Debug.print("=== Shutdown requested ===")
         self.__running = False
 
-    def redraw(self):
+    def redraw(self, _signum: int, _frame: FrameType | None) -> None:
         self.__view_queue.put(RedrawMessage())

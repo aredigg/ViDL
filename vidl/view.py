@@ -184,7 +184,7 @@ class View:
             self.__view_top_decorator[0]
             + ANSI.Inverse
             + " "
-            + f"{self.__top_index:>2.2}"
+            + f"{self.__top_index!s:>2.2}"
             + title
             + " "
             + ANSI.InverseReset
@@ -299,7 +299,7 @@ class View:
             line = (
                 f"{Util.get_date(self.__item_entity.date):>10.10}"
                 + " │ "
-                + f"{index_string:>4.4}"
+                + f"{index_string!s:>4.4}"
                 + " │ "
                 + f"{self.__item_entity.title:{max_len}.{max_len}}"
             )

@@ -4,29 +4,29 @@ from .debug import Debug
 
 
 class Logger:
-    BRACKET_PREFIX = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
-    MESSAGE_SLEEP = re.compile(r"Sleeping\s+(\d+(?:\.\d+)?)\s+seconds \.\.\.")
-    MESSAGE_SLEEP_ADS = re.compile(
+    BRACKET_PREFIX: re.Pattern[str] = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
+    MESSAGE_SLEEP: re.Pattern[str] = re.compile(
+        r"Sleeping\s+(\d+(?:\.\d+)?)\s+seconds \.\.\."
+    )
+    MESSAGE_SLEEP_ADS: re.Pattern[str] = re.compile(
         r"Sleeping\s+(\d+(?:\.\d+)?)\s+seconds as required by the site\.\.\."
     )
-    MESSAGE_DOWNLOAD_PAGE = re.compile(
+    MESSAGE_DOWNLOAD_PAGE: re.Pattern[str] = re.compile(
         r"([A-Za-z0-9_-]+)\s+page\s+(\d+): Downloading API JSON"
     )
-    MESSAGE_RETRY_ERROR = re.compile(
+    MESSAGE_RETRY_ERROR: re.Pattern[str] = re.compile(
         r"Got error: (\d+) bytes read, (\d+) more expected\. Retrying \((\d+)/(\d+)\)\.\.\."
     )
-    MESSAGE_MEMBER_LEVEL = re.compile(
-        r"This video is available to this channel's members on level: "
-        r"(.+?) \(or any higher level\)\. Join this channel to get access "
-        r"to members-only content and other exclusive perks\."
+    MESSAGE_MEMBER_LEVEL: re.Pattern[str] = re.compile(
+        r"This video is available to this channel's members on level: (.+?) \(or any higher level\)\. Join this channel to get access to members-only content and other exclusive perks\."
     )
 
-    def __init__(self, slot_index, report_error) -> None:
+    def __init__(self, slot_index: int, report_error) -> None:
         # self.__view_queue = view_queue
         self.__slot_index = slot_index
         self.__report_error = report_error
 
-    def debug(self, message):
+    def debug(self, message: str):
         provider, provider_message = self.__parse(message)
         if provider is not None:
             Debug.print(
@@ -35,7 +35,7 @@ class Logger:
         else:
             Debug.print(f"DBG {self.__slot_index} --> {message}")
 
-    def info(self, message):
+    def info(self, message: str):
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
         if provider is not None:
             Debug.print(
@@ -44,7 +44,7 @@ class Logger:
         else:
             Debug.print(f"INF {self.__slot_index} --> {message}")
 
-    def warning(self, message):
+    def warning(self, message: str):
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
         if provider is not None:
             Debug.print(
@@ -210,12 +210,12 @@ class Logger:
     #         return True
     #     return False
 
-    def __parse_prefix(self, prefix, message):
-        if message.startswith(prefix):
-            return message.removeprefix(prefix).strip()
-        return None
+    # def __parse_prefix(self, prefix, message):
+    #     if message.startswith(prefix):
+    #         return message.removeprefix(prefix).strip()
+    #     return None
 
-    def __parse_suffix(self, suffix, message: str):
-        if message.endswith(suffix):
-            return message.removesuffix(suffix).strip()
-        return None
+    # def __parse_suffix(self, suffix, message: str):
+    #     if message.endswith(suffix):
+    #         return message.removesuffix(suffix).strip()
+    #     return None

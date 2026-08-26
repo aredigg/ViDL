@@ -2,14 +2,15 @@
 
 import os
 import sys
+from typing import ClassVar
 
 
 class Config:
-    SLEEP_INTERVAL = 3
-    path = os.path.abspath(os.path.curdir)
-    ini = "config.ini"
+    SLEEP_INTERVAL: int = 3
+    path: str = os.path.abspath(os.path.curdir)
+    ini: str = "config.ini"
 
-    settings = {
+    settings: ClassVar[dict[str, dict[str, object]]] = {
         "Channels": {
             "file_name": "channels",
             "archived": "archived",
@@ -39,7 +40,7 @@ class Config:
         },
     }
 
-    ydl_settings = {
+    ydl_settings: ClassVar[dict[str, object]] = {
         "color": "no_color",
         "ignoreerrors": False,
         "noprogress": True,
@@ -59,16 +60,16 @@ class Config:
         "writedescription": False,
         "writeinfojson": False,
         "hls_prefer_native": True,
-        "extractor-args": {
-            "youtube": {"player_client": ["default", "web_embedded", "-tv_downgraded"]},
-        },
+        #        "extractor-args": {
+        #            "youtube": {"player_client": ["default", "web_embedded", "-tv_downgraded"]},
+        #        },
         "external_downloader_args": {
             "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"]
         },
     }
 
     @staticmethod
-    def initialize(config_ini=ini):
+    def initialize(config_ini: str = ini):
         Config.ini = config_ini
         Config.settings["Paths"]["config"] = Config.path
 
@@ -100,18 +101,18 @@ class Config:
         try:
             with open(Config.ini, "w", encoding="utf-8") as f:
                 for category, options in Config.settings.items():
-                    f.write(f"[{category}]\n")
+                    _ = f.write(f"[{category}]\n")
                     for key, value in options.items():
                         if isinstance(value, str):
-                            f.write(f'{key} = "{value}"\n')
+                            _ = f.write(f'{key} = "{value}"\n')
                         else:
-                            f.write(f"{key} = {value}\n")
-                    f.write("\n")
+                            _ = f.write(f"{key} = {value}\n")
+                    _ = f.write("\n")
         except OSError as e:
             print(f"File {Config.ini} error, {e}")
 
     @staticmethod
-    def interpret(value):
+    def interpret(value: str | None):
         # None
         if value is None or value == "None" or value == "":
             return None
@@ -129,11 +130,10 @@ class Config:
         except ValueError:
             ...
         # Boolean
-        if isinstance(value, str):
-            if value.casefold() in ["true", "yes"]:
-                return True
-            if value.casefold() in ["false", "no"]:
-                return False
+        if value.casefold() in ["true", "yes"]:
+            return True
+        if value.casefold() in ["false", "no"]:
+            return False
         return value
 
     @staticmethod

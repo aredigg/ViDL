@@ -29,19 +29,19 @@ from .view import View
 
 class ViewController:
     index = 0
-    UPDATES_PER_SECOND = 4
-    UPDATES_PER_SECOND = -(-UPDATES_PER_SECOND // len(View.ANIMATED)) * len(
+    UPDATES_PER_SECOND: int = 4
+    updates_per_second: int = -(-UPDATES_PER_SECOND // len(View.ANIMATED)) * len(
         View.ANIMATED
     )
-    RUN_LOOP_WAIT = 1 / UPDATES_PER_SECOND
+    RUN_LOOP_WAIT: float = 1 / updates_per_second
 
     def __init__(self) -> None:
         self.__ready: bool = False
         self.__views: dict[int, View] = {}
-        self.__slots_ = set()
+        #        self.__slots = set()
         self.__redraw_required = False
-        self.__input_queue = Queue()
-        self.__queue = Queue()
+        self.__input_queue: Queue[str] = Queue()
+        self.__queue: Queue[Message] = Queue()
         self.__halt_event = Event()
         self.__thread = Thread(
             target=self.__run, name=f"ViewController-{ViewController.index}"
@@ -68,7 +68,7 @@ class ViewController:
                     self.__redraw(terminal)
                 tacho = (
                     (monotonic_ns() % 1_000_000_000)
-                    * ViewController.UPDATES_PER_SECOND
+                    * ViewController.updates_per_second
                     // 1_000_000_000
                 )
                 if tacho == 0 and not completed:
@@ -305,10 +305,11 @@ class ViewController:
                     )
                 )
 
-    def get_queue(self, input_queue=False) -> Queue:
-        if input_queue:
-            return self.__input_queue
+    def get_queue(self) -> Queue[Message]:
         return self.__queue
+
+    def get_input_queue(self) -> Queue[str]:
+        return self.__input_queue
 
     def halt(self):
         self.__views[View.HEADER].set_status(

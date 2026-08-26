@@ -1,4 +1,6 @@
 from enum import Enum
+from queue import Queue
+from threading import Event
 
 from vidl.debug import Debug
 
@@ -32,9 +34,11 @@ class Hook:
         STARTED = "started"
         FINISHED = "finished"
 
-    def __init__(self, view_queue, halt_event, slot_index) -> None:
+    def __init__(
+        self, view_queue: Queue[Message], halt_event: Event, slot_index: int
+    ) -> None:
         self.__view_queue = view_queue
-        self.__halt_event = halt_event
+        self.__halt_event: Event = halt_event
         self.__slot_index = slot_index
 
     def common(self, data):

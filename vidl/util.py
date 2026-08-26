@@ -1,12 +1,14 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class Util:
-    date_fmt = "%Y-%m-%d"
-    time_fmt = "%H:%M"
+    date_fmt: str = "%Y-%m-%d"
+    time_fmt: str = "%H:%M"
 
     @staticmethod
-    def format_seconds(seconds: int, include_seconds=True, two_parts=True):
+    def format_seconds(
+        seconds: int, include_seconds: bool = True, two_parts: bool = True
+    ):
         if seconds < 0:
             seconds = -seconds
         hr = int(seconds / 3600)
@@ -26,17 +28,25 @@ class Util:
         return f"{hr:02}:{mn:02}′"
 
     @staticmethod
-    def get_date(epoch=None):
+    def get_date(epoch: int | None = None):
         if epoch == 0:
             return ""
         if epoch is None:
-            return datetime.strftime(datetime.now(), Util.date_fmt)
-        return datetime.strftime(datetime.fromtimestamp(epoch), Util.date_fmt)
+            return datetime.strftime(
+                datetime.now(tz=timezone.utc).astimezone(), Util.date_fmt
+            )
+        return datetime.strftime(
+            datetime.fromtimestamp(epoch, tz=timezone.utc).astimezone(), Util.date_fmt
+        )
 
     @staticmethod
-    def get_time(epoch=None):
+    def get_time(epoch: int | None = None):
         if epoch == 0:
             return ""
         if epoch is None:
-            return datetime.strftime(datetime.now(), Util.time_fmt)
-        return datetime.strftime(datetime.fromtimestamp(epoch), Util.time_fmt)
+            return datetime.strftime(
+                datetime.now(tz=timezone.utc).astimezone(), Util.time_fmt
+            )
+        return datetime.strftime(
+            datetime.fromtimestamp(epoch, tz=timezone.utc).astimezone(), Util.time_fmt
+        )

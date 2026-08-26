@@ -6,7 +6,7 @@ from .coordinator import Coordinator
 from .debug import Debug
 
 
-def main(args) -> int:
+def main(args: list[str]) -> int:
     status, error = 0, None
     if len(args) > 0:
         Config.initialize(args[0])
@@ -24,7 +24,7 @@ def main(args) -> int:
             coord = Coordinator()
             status = coord.run()
             error = coord.error()
-    except Exception as e:
+    except Exception as e:  # noqa
         status, error = 4, e
     if error is not None:
         print(f"ERROR: {error}", file=sys.stderr)

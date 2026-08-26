@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from statistics import StatisticsError, median
 from time import time
+from typing import ClassVar
 
 from .ansi import ANSI
 from .config import Config
@@ -13,16 +14,30 @@ from .util import Util
 
 
 class View:
-    HEADER = -1
-    HEADER_HEIGHT = 5
-    ROW_MIN_SIZE = 12
-    COL_MIN_SIZE = 120
-    RING_SIZE = 20
-    NF_PREFIX = ""
-    NF_SUFFIX = ""
-    INVALID_TIIME = "--:-- "
-    ANIMATED = ["○", "●", "○", "●"]
-    COUNTDOWN = ["   ", " 1 ", " 2 ", " 3 ", " 4 ", " 5 ", " 6 ", " 7 ", " 8 ", " 9 "]
+    HEADER: int = -1
+    HEADER_HEIGHT: int = 5
+    ROW_MIN_SIZE: int = 12
+    COL_MIN_SIZE: int = 120
+    RING_SIZE: int = 20
+    NF_PREFIX: str = ""
+    NF_SUFFIX: str = ""
+    NF_VIDEO: str = ""
+    NF_AUDIO: str = ""
+    NF_SUBTITLE: str = "󰨖"
+    INVALID_TIIME: str = "--:-- "
+    ANIMATED: ClassVar[list[str]] = ["○", "●", "○", "●"]
+    COUNTDOWN: ClassVar[list[str]] = [
+        "   ",
+        " 1 ",
+        " 2 ",
+        " 3 ",
+        " 4 ",
+        " 5 ",
+        " 6 ",
+        " 7 ",
+        " 8 ",
+        " 9 ",
+    ]
 
     @dataclass
     class Status:
@@ -129,11 +144,11 @@ class View:
         origin_row: int = 1
         origin_col: int = 1
 
-    def __init__(self, border=True, header=False) -> None:
+    def __init__(self, border: bool = True, header: bool = False) -> None:
         self.__size = View.Size(rows=1, cols=1)
         self.__border = border
         self.__header = header
-        self.__top_index = 0
+        self.__top_index: int = 0
         self.__view_top_decorator = ("", "")
         if Config.settings["General"]["nerd_fonts"]:
             self.__view_top_decorator = (View.NF_PREFIX, View.NF_SUFFIX)
@@ -143,9 +158,9 @@ class View:
         self.__top = View.Top()
         self.__temp_filepath: str | None = None
         self.__playlist_length = 0
-        self.__bitrate_ring = deque(maxlen=View.RING_SIZE)
-        self.__size_delta_ring = deque(maxlen=View.RING_SIZE)
-        self.__time_delta_ring = deque(maxlen=View.RING_SIZE)
+        self.__bitrate_ring: deque[int] = deque(maxlen=View.RING_SIZE)
+        self.__size_delta_ring: deque[int] = deque(maxlen=View.RING_SIZE)
+        self.__time_delta_ring: deque[float] = deque(maxlen=View.RING_SIZE)
         self.__previous_elapsed = None
         self.__previous_size = None
         self.__item_entity: Item.Entity | None = None
@@ -169,7 +184,7 @@ class View:
             self.__view_top_decorator[0]
             + ANSI.Inverse
             + " "
-            + f"{str(self.__top_index):>2.2}"
+            + f"{self.__top_index:>2.2}"
             + title
             + " "
             + ANSI.InverseReset
@@ -325,7 +340,7 @@ class View:
                     size = int(self.__item_progress.size_total) >> 20
                     line += f"{size:>6} MB"
             self.__print(terminal, 6, line)
-            stats = []
+            stats: list[str] = []
             if self.__item_media.video_stat:
                 stats.append(self.__item_media.video_stat)
             if self.__item_media.audio_stat:
@@ -352,7 +367,7 @@ class View:
             self.__size.origin_col + 4,
         )
 
-    def __progress_meter(self, length, percent, kind="-") -> str:
+    def __progress_meter(self, length: int, percent: float, kind: str = "-") -> str:
         if length < 1:
             return ""
         progress = int((length * min(100, max(0, percent))) / 100)
@@ -382,7 +397,7 @@ class View:
                 if elapsed_delta and size_delta:
                     bitrate = int((size_delta << 3) / elapsed_delta) >> 10
                     self.__bitrate_ring.append(bitrate)
-                if not len(self.__bitrate_ring) == View.RING_SIZE:
+                if len(self.__bitrate_ring) != View.RING_SIZE:
                     return 0, False
                 remaining_bits = int(self.__item_progress.size_total - size) >> 7
                 try:
@@ -418,8 +433,9 @@ class View:
                 size_current=size_current, size_total=size_current
             )
         else:
-            if size_current > self.__item_progress.size_current:
-                self.__item_progress.size_current = size_current
+            self.__item_progress.size_current = max(
+                size_current, self.__item_progress.size_current
+            )
 
     def resize(
         self,
@@ -505,6 +521,8 @@ class View:
                     seconds = int(time()) - self.__timer
             case View.Status.State.DOWNLOAD:
                 seconds, _ = self.__smooth_remaining_time()
+            case _:
+                pass
         return (
             f" {View.COUNTDOWN[seconds]}"
             if 0 < seconds < 10

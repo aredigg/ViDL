@@ -3,7 +3,7 @@ import unicodedata
 
 class Unicode:
     @staticmethod
-    def len(string):
+    def len(string: str) -> int:
         length = 0
         for char in string:
             if Unicode.__long(char):
@@ -13,7 +13,7 @@ class Unicode:
         return length
 
     @staticmethod
-    def __zero_size(c):
+    def __zero_size(c: str) -> bool:
         return (
             unicodedata.category(c) in ("Mn", "Me", "Cf")
             and ord(c) != 0x200D
@@ -21,11 +21,11 @@ class Unicode:
         )
 
     @staticmethod
-    def __short(c):
+    def __short(c: str) -> bool:
         return not (Unicode.__zero_size(c) or Unicode.__long(c))
 
     @staticmethod
-    def __long(c):
+    def __long(c: str) -> bool:
         o = ord(c)
         return (
             0x1F300 <= o <= 0x1F9FF

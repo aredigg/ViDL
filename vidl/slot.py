@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, cast
 
 from yt_dlp import YoutubeDL
 
+from .channel import Channel
 from .config import Config
 from .hook import DownloadCancelled, Hook
 from .logger import Logger
@@ -15,19 +16,19 @@ if TYPE_CHECKING:
 
 
 class Slot:
-    processor_lock = Lock()
+    processor_lock: Lock = Lock()
 
-    def __init__(self, index, view_queue) -> None:
+    def __init__(self, index: int, view_queue) -> None:
         self.__index = index
-        self.__view_queue = view_queue
+        self.__view_queue: Queue[Message] = view_queue
         self.__channel = None
         self.__ready = False
-        self.__queue = Queue()
+        self.__queue: Queue[Channel | None] = Queue()
         self.__halt_event = Event()
         self.__thread = Thread(target=self.__run, name=f"Slot-{index}")
         self.__thread.start()
 
-    def process(self, channel):
+    def process(self, channel: Channel):
         self.__ready = False
         self.__channel = channel
         self.__queue.put(channel)
@@ -50,14 +51,15 @@ class Slot:
                     with Slot.processor_lock:
                         processor = self.__setup(channel)
                     channel.set_halt_event(self.__halt_event)
-                    channel.download(self.__index, processor, self.__view_queue)
+                    # We could do something with the result
+                    _ = channel.download(self.__index, processor, self.__view_queue)
                 except DownloadCancelled:
                     ...
                 finally:
                     self.__channel = None
                     self.__ready = True
 
-    def __setup(self, channel):
+    def __setup(self, channel: Channel):
         hook = Hook(self.__view_queue, self.__halt_event, self.__index)
         settings = deepcopy(Config.ydl_settings)
         if cookie_browser := Config.settings["General"]["cookie_browser"]:

@@ -2,7 +2,7 @@ from queue import Empty
 from signal import SIGTERM, SIGWINCH, signal
 from time import sleep
 
-from .channel import Channel
+from .channel import Channel, ChannelHelper
 from .config import Config
 from .debug import Debug
 from .message import RedrawMessage
@@ -11,33 +11,33 @@ from .view_controller import ViewController
 
 
 class Coordinator:
-    SAVE_INTERVAL = 30
+    SAVE_INTERVAL: int = 30
 
     def __init__(self) -> None:
         self.__running = True
         self.__view = ViewController()
         self.__view_queue = self.__view.get_queue()
-        self.__input_queue = self.__view.get_queue(input_queue=True)
+        self.__input_queue = self.__view.get_input_queue()
         self.__channels = []
         self.__slots = []
         self.__error = None
         try:
-            self.__channels = Channel.load_channels(
-                Config.settings["Channels"]["file_name"]
+            self.__channels: list[Channel] = ChannelHelper.load_channels(
+                str(Config.settings["Channels"]["file_name"])
             )
         except FileNotFoundError as e:
             self.__error = e
             self.__running = False
         number_of_slots = min(
-            max(1, Config.settings["Channels"]["slots"]), len(self.__channels)
+            max(1, int(Config.settings["Channels"]["slots"] or 0)), len(self.__channels)
         )
         self.__slots = [Slot(i, self.__view_queue) for i in range(number_of_slots)]
-        signal(SIGTERM, lambda *_: self.halt())
-        signal(SIGWINCH, lambda *_: self.redraw())
+        _ = signal(SIGTERM, lambda *_: self.halt())
+        _ = signal(SIGWINCH, lambda *_: self.redraw())
 
     def __save_channels(self):
-        ret = Channel.save_channels(
-            self.__channels, Config.settings["Channels"]["file_name"]
+        ret = ChannelHelper.save_channels(
+            self.__channels, str(Config.settings["Channels"]["file_name"])
         )
         if ret is not None:
             self.__error = ret

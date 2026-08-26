@@ -174,7 +174,7 @@ class Channel:
                     ),
                 )
             )
-            if info.get("_type") == "playlist":
+            if Item.get_str(info, "_type") == "playlist":
                 queue.put(
                     InfoMessage(
                         index=self.__slot_index,
@@ -196,14 +196,8 @@ class Channel:
                         )
                     )
                     for entry in cast(list[dict[str, object]], entries):
-                        if (
-                            not (
-                                self.__halt_event is not None
-                                and self.__halt_event.is_set()
-                            )
-                        ) and (
-                            url := Item.get_str(entry, "webpage_url")
-                            or Item.get_str(entry, "url")
+                        if url := Item.get_str(entry, "webpage_url") or Item.get_str(
+                            entry, "url"
                         ):
                             sub_channels.append(
                                 Channel(
@@ -215,6 +209,10 @@ class Channel:
                                     sub_level=self.__sub_level + 1,
                                 )
                             )
+                        if self.__halt_event is not None and self.__halt_event.is_set():
+                            sub_channels.clear()
+                            break
+
                 if sub_channels:
                     for enum_playlist_index, channel in enumerate(
                         sub_channels, start=1
@@ -253,12 +251,6 @@ class Channel:
                                 value=self.__epoch_cutoff,
                             )
                         )
-
-                record_download_archive = cast(
-                    Callable[[dict[str, object]], None],
-                    processor.record_download_archive,
-                )
-                record_download_archive(info)
                 path = cast(
                     Callable[[dict[str, object], str], str], processor.prepare_filename
                 )

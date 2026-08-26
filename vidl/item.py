@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from time import time
 from typing import cast
@@ -71,8 +71,12 @@ class Item:
         ret: list[object] = []
         if info:
             value = info.get(key)
-            if value and isinstance(value, list):
+            if isinstance(value, list):
                 return cast(list[object], value)
+            elif isinstance(value, Iterable) and not isinstance(
+                value, (str, bytes, Mapping)
+            ):
+                return list(value)
         return ret
 
     @staticmethod

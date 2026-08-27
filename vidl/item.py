@@ -126,17 +126,25 @@ class Item:
         parts = Item.get_str(data, "filename").upper().split(".")
         if len(parts) > 0:
             extension = parts[-1]
+        percent = Item.get_flt(data, "_percent")
+        fragment_current = Item.get_int(data, "fragment_index")
+        fragment_total = Item.get_int(data, "fragment_count")
+        if not percent:
+            if total_bytes:
+                percent = 100 * downloaded_bytes / total_bytes
+            elif fragment_total:
+                percent = 100 * fragment_current / fragment_total
 
         return Item.Progress(
             time_current=elapsed,
             time_total=elapsed + remaining,
             size_current=downloaded_bytes,
             size_total=total_bytes,
-            fragment_current=Item.get_int(data, "fragment_index"),
-            fragment_total=Item.get_int(data, "fragment_count"),
+            fragment_current=fragment_current,
+            fragment_total=fragment_total,
             bitrate=bitrate,
             eta=Item.get_int(data, "eta"),
-            percent=Item.get_flt(data, "_percent"),
+            percent=percent,
             process=Item.get_str(data, "postprocessor", "Progress"),
             status=Item.get_str(data, "status"),
             extension=extension,
@@ -148,7 +156,10 @@ class Item:
         height = Item.get_int(info, "height")
         video_stat = audio_stat = subtitle_stat = ""
         if width and height:
-            video_stat = f"{width}x{height}@{int(Item.get_flt(info, 'fps'))} {Item.get_str(info, 'dynamic_range', 'SDR')} {Item.get_str(info, 'vcodec', '----')[:4].upper()}"
+            fps = int(Item.get_flt(info, "fps"))
+            video_stat = f"{width}x{height}"
+            video_stat += f"@{fps} " if fps else " "
+            video_stat += f"{Item.get_str(info, 'dynamic_range', 'SDR')} {Item.get_str(info, 'vcodec', '----')[:4].upper()}"
         asr = info.get("asr") or 0
         audio_channels = info.get("audio_channels") or 0
         if asr and audio_channels:

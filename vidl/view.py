@@ -58,7 +58,7 @@ class View:
         message: str = ""
 
         def __post_init__(self) -> None:
-            self.provider = self.provider.replace(":", " ").capitalize()
+            self.provider = self.provider.replace(":", " ")
 
         def symbol(self, seq: int) -> str:
             match self.state:
@@ -461,7 +461,7 @@ class View:
         self.__item_media = None
         self.__previous_elapsed = None
         self.__previous_size = None
-        self.__bitrate_ring.clear()
+        #    self.__bitrate_ring.clear()
         self.__size_delta_ring.clear()
         self.__time_delta_ring.clear()
 

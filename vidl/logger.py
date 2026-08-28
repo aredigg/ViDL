@@ -31,28 +31,29 @@ class Logger:
         provider, provider_message = self.__parse(message)
         if provider is not None:
             Debug.print(
-                f"DBG {self.__slot_index} --> {provider:>20.20} | {provider_message}"
+                self.__slot_index, f"DBG --> {provider:>20.20} | {provider_message}"
             )
         else:
-            Debug.print(f"DBG {self.__slot_index} --> {message}")
+            Debug.print(self.__slot_index, f"DBG --> {message}")
 
     def info(self, message: str):
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
         if provider is not None:
             Debug.print(
-                f"INF {self.__slot_index} --> {provider:>20.20} | {provider_message}"
+                self.__slot_index,
+                f"INF {self.__slot_index} --> {provider:>20.20} | {provider_message}",
             )
         else:
-            Debug.print(f"INF {self.__slot_index} --> {message}")
+            Debug.print(self.__slot_index, f"INF --> {message}")
 
     def warning(self, message: str):
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
         if provider is not None:
             Debug.print(
-                f"WRN {self.__slot_index} --> {provider:>20.20} | {provider_message}"
+                self.__slot_index, f"WRN --> {provider:>20.20} | {provider_message}"
             )
         else:
-            Debug.print(f"WRN {self.__slot_index} --> {message}")
+            Debug.print(self.__slot_index, f"WRN --> {message}")
 
     def error(self, message: str):
         provider, provider_message = self.__parse(message.removeprefix("ERROR: "))
@@ -60,10 +61,10 @@ class Logger:
         self.__report_error(message)
         if provider is not None:
             Debug.print(
-                f"ERR {self.__slot_index} --> {provider:>20.20} | {provider_message}"
+                self.__slot_index, f"ERR --> {provider:>20.20} | {provider_message}"
             )
         else:
-            Debug.print(f"ERR {self.__slot_index} --> {message}")
+            Debug.print(self.__slot_index, f"ERR --> {message}")
 
     def __parse(self, message: str) -> tuple[str | None, str]:
         match = Logger.BRACKET_PREFIX.match(message)

@@ -32,12 +32,13 @@ class Item:
         percent: float = 0
         process: str = ""
         status: str = ""
-        extension: str = "---"
+        extension: str = ""
 
     @dataclass
     class Media:
         length: int
         extension: str
+        container: str
         video_stat: str
         audio_stat: str
         subtitle_stat: str
@@ -56,6 +57,8 @@ class Item:
             value = info.get(key)
             if value and isinstance(value, int):
                 return value
+            if value and isinstance(value, float):
+                return int(value)
         return ret
 
     @staticmethod
@@ -64,6 +67,8 @@ class Item:
             value = info.get(key)
             if value and isinstance(value, float):
                 return value
+            if value and isinstance(value, int):
+                return float(value)
         return ret
 
     @staticmethod
@@ -93,7 +98,7 @@ class Item:
 
     @staticmethod
     def get_entity(info: dict[str, object], name: str, index: int) -> Entity:
-        stream = "VIDEO"
+        stream = ""
         if info.get("is_live") or False:
             stream = "LIVE"
         elif info.get("live_status") in ("is_upcoming", "was_live", "post_live"):
@@ -122,7 +127,7 @@ class Item:
             bitrate = int((downloaded_bytes << 3) / elapsed) >> 10
         remaining_bits = int(total_bytes - downloaded_bytes) >> 7
         remaining = int(remaining_bits / bitrate) if bitrate > 0 else 0
-        extension = "----"
+        extension = ""
         parts = Item.get_str(data, "filename").upper().split(".")
         if len(parts) > 0:
             extension = parts[-1]
@@ -171,7 +176,8 @@ class Item:
         subtitle_stat = "/".join(subtitles)
         return Item.Media(
             length=Item.get_int(info, "duration"),
-            extension=Item.get_str(info, "ext", "---"),
+            extension=Item.get_str(info, "ext"),
+            container=Item.get_str(info, "container") or Item.get_str(info, "protocol"),
             video_stat=video_stat,
             audio_stat=audio_stat,
             subtitle_stat=subtitle_stat,

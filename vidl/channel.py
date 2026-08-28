@@ -226,7 +226,9 @@ class Channel:
                             )
                             self.assign_epoch_cutoff(channel.get_epoch_cutoff())
             else:
+                Debug.print(self.__slot_index, str(info))
                 format = Item.enumerate_best_format(info)
+                Debug.print(self.__slot_index, str(format))
                 if Item.no_vertical(format):
                     self.__record_archive(processor, info)
                     self.__report_error(queue, "Vertical video")
@@ -320,7 +322,10 @@ class Channel:
         else:
             error = Error(str(e))
             self.__report_error(queue, error.message, error.identity)
-        Debug.print(str(e))
+        if self.__slot_index is not None:
+            Debug.print(self.__slot_index, str(e))
+        else:
+            Debug.print(-1, str(e))
 
     def __report_error(
         self, queue: Queue[Message], message: str | None, target: str | None = None

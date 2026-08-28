@@ -97,6 +97,8 @@ class ViewController:
         # Set header size
         _ = self.__views[View.HEADER].resize(rows=View.HEADER_HEIGHT, cols=char_cols)
         # Calculate and set each views size and positions
+        for view in self.__views.values():
+            view.set_visible(False)
         view_rows = max(1, (char_rows - View.HEADER_HEIGHT) // View.ROW_MIN_SIZE)
         view_cols = max(1, (char_cols - 1) // View.COL_MIN_SIZE)
         view_col_size = char_cols // view_cols
@@ -111,6 +113,7 @@ class ViewController:
                         rows=View.ROW_MIN_SIZE,
                         cols=view_col_size,
                     )
+                    self.__views[slot].set_visible(True)
                 except StopIteration:
                     return
 

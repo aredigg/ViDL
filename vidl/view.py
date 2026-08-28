@@ -148,6 +148,7 @@ class View:
         self.__size = View.Size(rows=1, cols=1)
         self.__border = border
         self.__header = header
+        self.__visible = False
         self.__top_index: int = 0
         self.__view_top_decorator = ("", "")
         if Config.settings["General"]["nerd_fonts"]:
@@ -289,40 +290,45 @@ class View:
     def __item_line(self, terminal: Terminal):
         if self.__item_entity is not None:
             max_len = self.__size.cols - 34
-            index = 0
-            index_string = ""
-            if self.__item_entity.index:
-                index = self.__item_entity.index
-            if index > 0 and self.__playlist_length > 0:
-                index = max(1, self.__playlist_length - index + 1)
-                index_string = str(index)
-            line = (
-                f"{Util.get_date(self.__item_entity.date):>10.10}"
-                + " │ "
-                + f"{index_string!s:>4.4}"
-                + " │ "
-                + f"{self.__item_entity.title:{max_len}.{max_len}}"
-            )
-            line_len = ANSI.len(line)
-            if line_len < self.__size.cols - 10:
-                line = line + " " * (self.__size.cols - 8 - line_len)
-                terminal.print(
-                    line, self.__size.origin_row + 4, self.__size.origin_col + 4
+            if max_len > 0:
+                index = 0
+                index_string = ""
+                if self.__item_entity.index:
+                    index = self.__item_entity.index
+                if index > 0 and self.__playlist_length > 0:
+                    index = max(1, self.__playlist_length - index + 1)
+                    index_string = str(index)
+                line = (
+                    f"{Util.get_date(self.__item_entity.date):>10.10}"
+                    + " │ "
+                    + f"{index_string!s:>4.4}"
+                    + " │ "
+                    + f"{self.__item_entity.title:{max_len}.{max_len}}"
                 )
-            if self.__item_entity.title != self.__item_entity.id:
-                line = f" [{self.__item_entity.id}]"
                 line_len = ANSI.len(line)
                 if line_len < self.__size.cols - 10:
+                    line = line + " " * (self.__size.cols - 8 - line_len)
                     terminal.print(
-                        line,
-                        self.__size.origin_row + 4,
-                        self.__size.origin_col + (self.__size.cols - 4 - line_len),
+                        line, self.__size.origin_row + 4, self.__size.origin_col + 4
                     )
-            terminal.print(
-                ("─" * 11) + "┴" + ("─" * 6) + "┼" + ("─" * (self.__size.cols - 27)),
-                self.__size.origin_row + 5,
-                self.__size.origin_col + 4,
-            )
+                if self.__item_entity.title != self.__item_entity.id:
+                    line = f" [{self.__item_entity.id}]"
+                    line_len = ANSI.len(line)
+                    if line_len < self.__size.cols - 10:
+                        terminal.print(
+                            line,
+                            self.__size.origin_row + 4,
+                            self.__size.origin_col + (self.__size.cols - 4 - line_len),
+                        )
+                terminal.print(
+                    ("─" * 11)
+                    + "┴"
+                    + ("─" * 6)
+                    + "┼"
+                    + ("─" * (self.__size.cols - 27)),
+                    self.__size.origin_row + 5,
+                    self.__size.origin_col + 4,
+                )
         else:
             self.__print(terminal, 4)
             self.__print(terminal, 5)
@@ -332,8 +338,13 @@ class View:
         if self.__item_media is not None:
             line = (
                 " " * OFFSET
-                + f"│ {Util.format_seconds(self.__item_media.length, two_parts=False)} {self.__item_media.extension.upper()} "
+                + f"│ {Util.format_seconds(self.__item_media.length, two_parts=False)} "
             )
+            extension = self.__item_media.extension.upper()
+            container = self.__item_media.container.upper()
+            line += f"{extension}" if extension else ""
+            line += "/" if extension and container else " "
+            line += f"{container} " if container else " "
             if self.__item_progress is not None and self.__item_entity is not None:
                 line += f"{self.__item_entity.stream} ({self.__item_entity.age_limit}) "
                 if self.__item_progress.size_total:
@@ -479,11 +490,12 @@ class View:
         if self.__header:
             self.__draw_header(terminal)
         else:
-            self.__update_filesize()
-            self.__item_line(terminal)
-            self.__media_line(terminal)
-            self.__draw_border(terminal)
-            self.__status_line(terminal, sequence)
+            if self.__visible:
+                self.__update_filesize()
+                self.__item_line(terminal)
+                self.__media_line(terminal)
+                self.__draw_border(terminal)
+                self.__status_line(terminal, sequence)
 
     def set_status(self, status: Status) -> None:
         self.__status = status
@@ -534,6 +546,9 @@ class View:
 
     def reset_top(self) -> None:
         self.__top = View.Top()
+
+    def set_visible(self, visible: bool):
+        self.__visible = visible
 
     def set_count(self, value: int) -> None:
         if value > 0:

@@ -44,7 +44,8 @@ class Hook:
     def common(self, data: dict[str, object]):
         if Item.get_progress(data=data).status != self.Status.DOWNLOADING.value:
             Debug.print(
-                f"> HOOK {self.__slot_index} --> {Item.get_progress(data=data).process}: {Item.get_progress(data=data).status}"
+                self.__slot_index,
+                f"HOOK --> {Item.get_progress(data=data).process}: {Item.get_progress(data=data).status}",
             )
         self.__view_queue.put(
             ProgressMessage(

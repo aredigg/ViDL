@@ -15,7 +15,7 @@ class Debug:
     BUFFER_SIZE: int = 4096
     buffer: str = ""
     wrapper: io.TextIOWrapper | None = None
-    queue: Queue[str] | None = None
+    queue: Queue[tuple[int, str]] | None = None
     thread: Thread | None = None
     inactive: Event | None = None
 
@@ -33,7 +33,7 @@ class Debug:
         if Debug.inactive is not None:
             Debug.inactive.set()
         if Debug.thread is not None:
-            Debug.print("=== Inactive ===")
+            Debug.print(-1, "=== Inactive ===")
             Debug.thread.join()
 
     @staticmethod
@@ -42,21 +42,24 @@ class Debug:
             with open(file_name, "a") as Debug.wrapper:
                 if Debug.queue is not None and Debug.inactive is not None:
                     try:
-                        Debug.__write("=== Begin ===")
+                        Debug.__write(-1, "=== Begin ===")
                         while not Debug.inactive.is_set():
-                            message = Debug.queue.get()
+                            slot_index, message = Debug.queue.get()
                             if message:
-                                Debug.__write(message)
+                                Debug.__write(slot_index, message)
                     finally:
-                        Debug.__write("=== End ===")
+                        Debug.__write(-1, "=== End ===")
                         _ = Debug.wrapper.write(Debug.buffer)
                         Debug.wrapper.flush()
 
     @staticmethod
-    def __write(message: str):
+    def __write(slot_index: int, message: str):
         prefix = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         message = ANSI.remove(str(message))
-        Debug.buffer += f"{prefix} UTC > {message}\n"
+        if slot_index < 0:
+            Debug.buffer += f"{prefix} UTC > {message}\n"
+        else:
+            Debug.buffer += f"{prefix} UTC > SLOT-{slot_index + 1:02} > {message}\n"
         if Debug.wrapper is not None and len(Debug.buffer) > Debug.BUFFER_SIZE:
             _ = Debug.wrapper.write(Debug.buffer)
             Debug.wrapper.flush()
@@ -70,7 +73,7 @@ class Debug:
     ):
         buffer = io.StringIO()
         traceback.print_exception(exc_type, exc_value, exc_traceback, file=buffer)
-        Debug.print("Exception:\n" + buffer.getvalue())
+        Debug.print(-1, "Exception:\n" + buffer.getvalue())
 
     @staticmethod
     def __thread_except_handler(args: ExceptHookArgs):
@@ -78,6 +81,6 @@ class Debug:
 
     # Called externally
     @staticmethod
-    def print(message: str):
+    def print(slot_index: int, message: str):
         if Debug.queue is not None and Debug.inactive is not None:
-            Debug.queue.put(message)
+            Debug.queue.put((slot_index, message))

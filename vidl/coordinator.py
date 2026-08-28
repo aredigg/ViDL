@@ -102,7 +102,7 @@ class Coordinator:
             self.halt(0, None)
 
     def halt(self, _signum: int, _frame: FrameType | None) -> None:
-        Debug.print("=== Shutdown requested ===")
+        Debug.print(-1, "=== Shutdown requested ===")
         self.__running = False
 
     def redraw(self, _signum: int, _frame: FrameType | None) -> None:

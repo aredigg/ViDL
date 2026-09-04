@@ -1,4 +1,5 @@
 import io
+import os
 import sys
 import threading
 import traceback
@@ -6,13 +7,14 @@ from datetime import datetime, timezone
 from queue import Queue
 from threading import Event, ExceptHookArgs, Thread
 from types import TracebackType
+from typing import cast
 
 from .ansi import ANSI
 from .config import Config
 
 
 class Debug:
-    BUFFER_SIZE: int = 4096
+    BUFFER_SIZE: int = 16384
     buffer: str = ""
     wrapper: io.TextIOWrapper | None = None
     queue: Queue[tuple[int, str]] | None = None
@@ -38,19 +40,28 @@ class Debug:
 
     @staticmethod
     def __loop():
-        if file_name := str(Config.settings["Debug"]["file_name"]):
+        if (
+            (file_name := str(Config.settings["Debug"]["file_name"]))
+            and Debug.queue is not None
+            and Debug.inactive is not None
+        ):
             with open(file_name, "a") as Debug.wrapper:
-                if Debug.queue is not None and Debug.inactive is not None:
-                    try:
-                        Debug.__write(-1, "=== Begin ===")
-                        while not Debug.inactive.is_set():
-                            slot_index, message = Debug.queue.get()
-                            if message:
-                                Debug.__write(slot_index, message)
-                    finally:
-                        Debug.__write(-1, "=== End ===")
-                        _ = Debug.wrapper.write(Debug.buffer)
-                        Debug.wrapper.flush()
+                try:
+                    Debug.__write(-1, "=== Begin ===")
+                    while not Debug.inactive.is_set():
+                        slot_index, message = Debug.queue.get()
+                        if message:
+                            Debug.__write(slot_index, message)
+                        if Debug.__wrap_around(file_name):
+                            Debug.__write(-1, "=== Wrap ===")
+                            break
+                finally:
+                    Debug.__write(-1, "=== End ===")
+                    _ = Debug.wrapper.write(Debug.buffer)
+                    Debug.wrapper.flush()
+            if not Debug.inactive.is_set():
+                Debug.__wrap_move(file_name)
+                Debug.__loop()
 
     @staticmethod
     def __write(slot_index: int, message: str):
@@ -64,6 +75,28 @@ class Debug:
             _ = Debug.wrapper.write(Debug.buffer)
             Debug.wrapper.flush()
             Debug.buffer = ""
+
+    @staticmethod
+    def __wrap_around(file_name: str) -> bool:
+        return (
+            os.path.getsize(file_name)
+            > cast(int, Config.settings["Debug"]["wrap_size"]) * Debug.BUFFER_SIZE
+        )
+
+    @staticmethod
+    def __wrap_move(file_name: str):
+        count = 0
+        while count < 1000 and os.path.exists(f"{file_name}.{count:03}"):
+            count += 1
+        if count == 1000:
+            os.remove(f"{file_name}.999")
+            count -= 1
+        for index in range(count - 1, -1, -1):
+            os.rename(
+                f"{file_name}.{index:03}",
+                f"{file_name}.{index + 1:03}",
+            )
+        os.rename(file_name, f"{file_name}.000")
 
     @staticmethod
     def __except_handler(

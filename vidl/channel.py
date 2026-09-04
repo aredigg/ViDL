@@ -120,6 +120,10 @@ class Channel:
             result = self.__extract(processor, queue, playlist_index)
             if result:
                 self.__set_download_date()
+                self.__set_error(None)
+            else:
+                if self.__get_error() is None:
+                    self.__set_error("Unknown error")
             return result
         finally:
             self.__slot_index = None
@@ -279,7 +283,6 @@ class Channel:
                 cutoff = (
                     cast(int, (Config.settings["Download"]["post_sleep_cutoff"])) * 60
                 )
-
                 sleep_time = max(min_sleep, min(cutoff, int(time()) - process_time))
                 queue.put(
                     SleepMessage(
@@ -342,6 +345,27 @@ class Channel:
                 )
             )
         self.__set_error(message)
+        # This is an indication of a temporary ban, so lets sleep it off
+        if (error := self.__get_error()) and error.endswith("Video unavailable"):
+            self.__backoff_sleep(queue)
+
+    def __backoff_sleep(self, queue: Queue[Message]):
+        if self.__halt_event is not None and self.__halt_event.wait(5):
+            return
+        sleep_time = 6 * 3600
+        if self.__slot_index is not None:
+            queue.put(
+                SleepMessage(
+                    index=self.__slot_index,
+                    provider=Message.Provider.CHANNEL,
+                    sleep_time=sleep_time,
+                    required=True,
+                )
+            )
+        sleep_until = int(time()) + sleep_time
+        while int(time()) < sleep_until:
+            if self.__halt_event is not None and self.__halt_event.wait(1):
+                return
 
     def __record_archive(self, processor: YoutubeDL, info: dict[str, object]):
         if processor.params.get("download_archive"):
@@ -372,6 +396,9 @@ class Channel:
     def __set_error(self, message: str | None):
         with Channel.__lock:
             self.__last_error = message
+
+    def __get_error(self) -> str | None:
+        return self.__last_error
 
     def __set_epoch_cutoff(self, epoch: int, timestamp: int):
         with Channel.__lock:

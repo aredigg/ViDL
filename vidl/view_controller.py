@@ -147,13 +147,22 @@ class ViewController:
                     view.set_status(View.Status(View.Status.State.DOWNLOAD_WAIT))
             elif message.provider == Message.Provider.CHANNEL:
                 view.reset()
-                view.set_status(
-                    status=View.Status(
-                        View.Status.State.SLEEPING,
-                        provider="Sleeping",
-                        message=f"ETA {Util.get_time(int(time() + message.sleep_time))}",
+                if message.required:
+                    view.set_status(
+                        status=View.Status(
+                            View.Status.State.SLEEPING,
+                            provider="Mandatory sleep",
+                            message=f"ETA {Util.get_time(int(time() + message.sleep_time))}",
+                        )
                     )
-                )
+                else:
+                    view.set_status(
+                        status=View.Status(
+                            View.Status.State.SLEEPING,
+                            provider="Sleeping",
+                            message=f"ETA {Util.get_time(int(time() + message.sleep_time))}",
+                        )
+                    )
             else:
                 if view.get_status().state not in (
                     View.Status.State.ERROR,

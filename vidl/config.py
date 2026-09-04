@@ -37,6 +37,7 @@ class Config:
         "Debug": {
             "file_name": "debug",
             "active": False,
+            "wrap_size": 1024,
         },
     }
 
@@ -164,6 +165,9 @@ class Config:
             result = False
         if not Config.settings["Paths"]["output"]:
             print("ERROR: Paths.output missing", file=sys.stderr)
+            result = False
+        if not isinstance(Config.settings["Debug"]["wrap_size"], int):
+            print("ERROR: Debug wrap size must be an integer", file=sys.stderr)
             result = False
         return result
 

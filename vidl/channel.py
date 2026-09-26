@@ -1,5 +1,7 @@
+import contextlib
 import csv
 import os
+import shutil
 import tempfile
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -26,9 +28,15 @@ from .message import (
     PathMessage,
     SleepMessage,
 )
+from .util import Util
 
 
 class Channel:
+    BACKOFF_TRIGGER: str = "Video unavailable"
+    BACKOFF_GRACE: int = 5
+    BACKOFF_SLEEP: int = 6 * Util.SECONDS_PER_HOUR
+    ALREADY_ARCHIVED: str = "Already recorded in archive"
+
     __lock = RLock()
     __write_archive_lock = RLock()
 
@@ -56,7 +64,9 @@ class Channel:
         self.__slot_index: int | None = None
         self.__epoch_cutoff: int = 0
         self.__epoch_cutoff_passed: bool = False
-        self.__halt_event: Event | None = None
+        self.__playlist: bool = False
+        # Replaced by the slot's event; the default is never set, it only avoids None checks
+        self.__halt_event: Event = Event()
 
     def row(self):
         with Channel.__lock:
@@ -83,16 +93,22 @@ class Channel:
     def get_epoch_cutoff(self) -> tuple[int, bool]:
         return self.__epoch_cutoff, self.__epoch_cutoff_passed
 
+    def is_playlist(self) -> bool:
+        return self.__playlist
+
     def assign_epoch_cutoff(self, cutoff: tuple[int, bool]):
         with Channel.__lock:
             self.__epoch_cutoff = cutoff[0]
             self.__epoch_cutoff_passed = cutoff[1]
 
-    def set_halt_event(self, halt_event: Event | None):
+    def set_halt_event(self, halt_event: Event):
         self.__halt_event = halt_event
 
     def set_active(self):
         self.__active = True
+
+    def set_inactive(self):
+        self.__active = False
 
     def active(self):
         return self.__active
@@ -132,19 +148,27 @@ class Channel:
     def __extract(
         self, processor: YoutubeDL, queue: Queue[Message], playlist_index: int
     ) -> bool:
-        if self.__halt_event is not None and self.__halt_event.is_set():
+        if self.__halt_event.is_set():
             self.__report_error(queue, "Got halted")
             return False
         if self.__slot_index is None:
             return False
         if self.__url is None or self.__url == "None":
             self.__url = self.__name
-        info: Mapping[str, object] = {}
+        self.__playlist = False
+        info: Mapping[str, object] | None = {}
         try:
             if self.__url is not None:
-                info = processor.extract_info(self.__url, download=False, process=False)
+                # Typed as never None, but it is when the id is in the download archive
+                info = cast(
+                    Mapping[str, object] | None,
+                    processor.extract_info(self.__url, download=False, process=False),
+                )
         except DownloadError as e:
             self.__handle_error_exception(queue, e)
+            return False
+        if info is None:
+            self.__set_error(Channel.ALREADY_ARCHIVED)
             return False
         if info:
             info = cast(dict[str, object], info)
@@ -162,7 +186,7 @@ class Channel:
                     provider=Message.Provider.CHANNEL,
                     entity=Item.get_entity(
                         info=info,
-                        name=Item.get_str(info, "channel") or self.__name
+                        name=(Item.get_str(info, "channel") or self.__name)
                         if self.__sub_level == 0
                         else "",
                         index=playlist_index,
@@ -179,6 +203,9 @@ class Channel:
                 )
             )
             if Item.get_str(info, "_type") == "playlist":
+                # Each playlist has its own cutoff, e.g. the tabs of a channel
+                self.__playlist = True
+                self.__reset_epoch_cutoff()
                 queue.put(
                     InfoMessage(
                         index=self.__slot_index,
@@ -213,7 +240,7 @@ class Channel:
                                     sub_level=self.__sub_level + 1,
                                 )
                             )
-                        if self.__halt_event is not None and self.__halt_event.is_set():
+                        if self.__halt_event.is_set():
                             sub_channels.clear()
                             break
 
@@ -228,7 +255,9 @@ class Channel:
                             _ = channel.download(
                                 self.__slot_index, processor, queue, enum_playlist_index
                             )
-                            self.assign_epoch_cutoff(channel.get_epoch_cutoff())
+                            # A nested playlist's cutoff does not apply to its siblings
+                            if not channel.is_playlist():
+                                self.assign_epoch_cutoff(channel.get_epoch_cutoff())
             else:
                 Debug.print(self.__slot_index, str(info))
                 format = Item.enumerate_best_format(info)
@@ -281,7 +310,8 @@ class Channel:
                 ret = self.__download(processor, queue, info)
                 min_sleep = cast(int, Config.settings["Download"]["sleep_interval"])
                 cutoff = (
-                    cast(int, (Config.settings["Download"]["post_sleep_cutoff"])) * 60
+                    cast(int, (Config.settings["Download"]["post_sleep_cutoff"]))
+                    * Util.SECONDS_PER_MINUTE
                 )
                 sleep_time = max(min_sleep, min(cutoff, int(time()) - process_time))
                 queue.put(
@@ -293,7 +323,7 @@ class Channel:
                 )
                 sleep_until = int(time()) + sleep_time
                 while int(time()) < sleep_until:
-                    if self.__halt_event is not None and self.__halt_event.wait(1):
+                    if self.__halt_event.wait(1):
                         return ret
                 return ret
         else:
@@ -346,13 +376,13 @@ class Channel:
             )
         self.__set_error(message)
         # This is an indication of a temporary ban, so lets sleep it off
-        if (error := self.__get_error()) and error.endswith("Video unavailable"):
+        if (error := self.__get_error()) and error.endswith(Channel.BACKOFF_TRIGGER):
             self.__backoff_sleep(queue)
 
     def __backoff_sleep(self, queue: Queue[Message]):
-        if self.__halt_event is not None and self.__halt_event.wait(5):
+        if self.__halt_event.wait(Channel.BACKOFF_GRACE):
             return
-        sleep_time = 6 * 3600
+        sleep_time = Channel.BACKOFF_SLEEP
         if self.__slot_index is not None:
             queue.put(
                 SleepMessage(
@@ -364,7 +394,7 @@ class Channel:
             )
         sleep_until = int(time()) + sleep_time
         while int(time()) < sleep_until:
-            if self.__halt_event is not None and self.__halt_event.wait(1):
+            if self.__halt_event.wait(1):
                 return
 
     def __record_archive(self, processor: YoutubeDL, info: dict[str, object]):
@@ -410,7 +440,8 @@ class Channel:
         timestamp: int = Item.get_int(info, "timestamp")
         if cutoff := cast(int, Config.settings["Download"]["playlist_cutoff"]):
             return not timestamp or (
-                timestamp >= self.__set_epoch_cutoff(cutoff * 86_400, timestamp)
+                timestamp
+                >= self.__set_epoch_cutoff(cutoff * Util.SECONDS_PER_DAY, timestamp)
             )
         return True
 
@@ -432,17 +463,23 @@ class ChannelHelper:
         with open(file_name, newline="", encoding="utf-8") as f:
             for row in csv.reader(f, delimiter=";"):
                 if row and not row[0].lstrip().startswith("#"):
+                    # A row may hold only the name, missing columns are padded
+                    # and surplus columns (e.g. a trailing ";") are ignored
                     cells = [cell.strip() or None for cell in row]
-                    if len(cells) == ChannelHelper.header_len:
-                        channels.append(Channel(*cells, sub_level=0))
-                    elif len(cells) > 0:
-                        channels.append(Channel(cells[0], None, None, None, None))
+                    cells = cells[: ChannelHelper.header_len]
+                    if not any(cells):
+                        continue
+                    cells += [None] * (ChannelHelper.header_len - len(cells))
+                    channels.append(Channel(*cells, sub_level=0))
         return channels
 
     @staticmethod
     def save_channels(channels: list[Channel], file_name: str):
-        directory = os.path.dirname(os.path.abspath(file_name)) or "."
+        # Write through symlinks, and keep the permissions of the existing file
+        target = os.path.realpath(file_name)
+        directory = os.path.dirname(target) or "."
         rows = [channel.row() for channel in channels]
+        temp: str | None = None
         try:
             fd, temp = tempfile.mkstemp(dir=directory, prefix=".channels-")
             with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
@@ -451,7 +488,13 @@ class ChannelHelper:
                 writer.writerows(rows)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(temp, file_name)
+            if os.path.exists(target):
+                shutil.copymode(target, temp)
+            os.replace(temp, target)
         except OSError as e:
             return e
+        finally:
+            if temp is not None and os.path.exists(temp):
+                with contextlib.suppress(OSError):
+                    os.remove(temp)
         return None

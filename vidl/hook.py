@@ -2,8 +2,7 @@ from enum import Enum
 from queue import Queue
 from threading import Event
 
-from vidl.debug import Debug
-
+from .debug import Debug
 from .item import Item
 from .message import MediaMessage, Message, ProgressMessage
 
@@ -42,16 +41,17 @@ class Hook:
         self.__slot_index = slot_index
 
     def common(self, data: dict[str, object]):
-        if Item.get_progress(data=data).status != self.Status.DOWNLOADING.value:
+        progress = Item.get_progress(data=data)
+        if progress.status != self.Status.DOWNLOADING.value:
             Debug.print(
                 self.__slot_index,
-                f"HOOK --> {Item.get_progress(data=data).process}: {Item.get_progress(data=data).status}",
+                f"HOOK --> {progress.process}: {progress.status}",
             )
         self.__view_queue.put(
             ProgressMessage(
                 index=self.__slot_index,
                 provider=Message.Provider.HOOK,
-                progress=Item.get_progress(data=data),
+                progress=progress,
             )
         )
         self.__view_queue.put(

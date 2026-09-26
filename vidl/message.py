@@ -53,11 +53,6 @@ class PathMessage(SlotMessage):
 
 
 @dataclass
-class UrlMessage(SlotMessage):
-    url: str
-
-
-@dataclass
 class EntityMessage(SlotMessage):
     entity: Item.Entity
 

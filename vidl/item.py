@@ -4,9 +4,13 @@ from time import time
 from typing import cast
 
 from .config import Config
+from .util import Util
 
 
 class Item:
+    # Videos above this height are not deferred while waiting for higher resolutions
+    DEFER_EXEMPT_HEIGHT: int = 2000
+
     @dataclass
     class Entity:
         id: str
@@ -204,7 +208,10 @@ class Item:
         height = Item.get_int(format, "height")
         timestamp = Item.get_int(info, "timestamp")
         if defer := cast(int, Config.settings["Download"]["resolution_defer"] or 0):
-            return timestamp < (int(time()) - defer * 86_400) or height > 2000
+            return (
+                timestamp < (int(time()) - defer * Util.SECONDS_PER_DAY)
+                or height > Item.DEFER_EXEMPT_HEIGHT
+            )
         return True
 
     @staticmethod

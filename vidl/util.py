@@ -2,6 +2,10 @@ from datetime import datetime, timezone
 
 
 class Util:
+    SECONDS_PER_MINUTE: int = 60
+    SECONDS_PER_HOUR: int = 3_600
+    SECONDS_PER_DAY: int = 86_400
+
     date_fmt: str = "%Y-%m-%d"
     time_fmt: str = "%H:%M"
 

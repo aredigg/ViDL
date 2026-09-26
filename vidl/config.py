@@ -158,23 +158,19 @@ class Config:
                 )
                 result = False
         if not isinstance(Config.settings["Channels"]["slots"], int):
-            print("ERROR: Slots must be an integer", file=sys.stderr)
+            print("ERROR: Channels.slots must be an integer", file=sys.stderr)
             result = False
         elif Config.settings["Channels"]["slots"] < 0:
-            print("ERROR: Channels.slots must be positive", file=sys.stderr)
+            print(
+                "ERROR: Channels.slots must not be negative "
+                + "(0 and 1 both use a single slot)",
+                file=sys.stderr,
+            )
             result = False
         if not Config.settings["Paths"]["output"]:
             print("ERROR: Paths.output missing", file=sys.stderr)
             result = False
         if not isinstance(Config.settings["Debug"]["wrap_size"], int):
-            print("ERROR: Debug wrap size must be an integer", file=sys.stderr)
+            print("ERROR: Debug.wrap_size must be an integer", file=sys.stderr)
             result = False
         return result
-
-    @staticmethod
-    def print():
-        for category, options in Config.settings.items():
-            print(f"{category}:")
-            for key, value in options.items():
-                print(f"  {key}: {value}")
-            print()

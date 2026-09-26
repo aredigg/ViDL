@@ -11,23 +11,29 @@ from .ansi import ANSI
 
 
 class Terminal:
+    INPUT_POLL_INTERVAL: float = 0.2
+
     def __init__(self, queue: Queue[str]) -> None:
         self.__width, self.__height = size()
         self.__queue: Queue[str] = queue
         self.__halt_event: Event = Event()
-        self.__thread = Thread(target=self.__read_input, name="Terminal-input")
-        self.__thread.start()
-        self.__fd = None
+        self.__thread: Thread | None = None
+        self.__fd: int | None = None
         self.__old_termios = None
-        self.__interactive = sys.stdin.isatty() and sys.stdout.isatty()
+        # Keyboard input is only read when stdin is a terminal
+        self.__interactive = sys.stdin is not None and sys.stdin.isatty()
 
     def __enter__(self):
-        self.__fd = sys.stdin.fileno()
-        try:
-            self.__old_termios = termios.tcgetattr(self.__fd)
-            _ = tty.setcbreak(self.__fd)
-        except termios.error:
-            self.__interactive = False
+        if self.__interactive:
+            fd = self.__fd = sys.stdin.fileno()
+            try:
+                self.__old_termios = termios.tcgetattr(fd)
+                _ = tty.setcbreak(fd)
+            except termios.error:
+                self.__interactive = False
+        if self.__interactive:
+            self.__thread = Thread(target=self.__read_input, name="Terminal-input")
+            self.__thread.start()
         print(ANSI.Alternate.Enter, end="")
         _ = sys.stdout.flush()
         return self
@@ -39,6 +45,8 @@ class Terminal:
         tb: TracebackType | None,
     ):
         self.__halt_event.set()
+        if self.__thread is not None:
+            self.__thread.join()
         print(ANSI.Alternate.Leave, end="")
         _ = sys.stdout.flush()
         if self.__old_termios is not None and self.__fd is not None:
@@ -47,7 +55,9 @@ class Terminal:
 
     def __read_input(self):
         while not self.__halt_event.is_set():
-            if (select([sys.stdin], [], [], 0.2)[0]) and (char := sys.stdin.read(1)):
+            if select([sys.stdin], [], [], Terminal.INPUT_POLL_INTERVAL)[0]:
+                if not (char := sys.stdin.read(1)):
+                    return  # EOF, stdin will stay readable and never block again
                 self.__queue.put(char)
 
     def get_size(self):

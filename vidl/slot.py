@@ -1,3 +1,4 @@
+import traceback
 from collections.abc import Callable
 from copy import deepcopy
 from queue import Queue
@@ -8,9 +9,10 @@ from yt_dlp import YoutubeDL
 
 from .channel import Channel
 from .config import Config
+from .debug import Debug
 from .hook import DownloadCancelled, Hook
 from .logger import Logger
-from .message import InitMessage, Message
+from .message import ErrorMessage, InitMessage, Message
 
 
 class Slot:
@@ -19,7 +21,6 @@ class Slot:
     def __init__(self, index: int, view_queue: Queue[Message]) -> None:
         self.__index = index
         self.__view_queue: Queue[Message] = view_queue
-        self.__channel = None
         self.__ready = False
         self.__queue: Queue[Channel | None] = Queue()
         self.__halt_event = Event()
@@ -28,14 +29,10 @@ class Slot:
 
     def process(self, channel: Channel):
         self.__ready = False
-        self.__channel = channel
         self.__queue.put(channel)
 
     def ready(self):
         return self.__ready and self.__thread.is_alive()
-
-    def channel(self):
-        return self.__channel
 
     def __run(self):
         self.__ready = True
@@ -45,6 +42,7 @@ class Slot:
         while not self.__halt_event.is_set():
             channel = self.__queue.get()
             if channel is not None:
+                processor: YoutubeDL | None = None
                 try:
                     with Slot.processor_lock:
                         processor = self.__setup(channel)
@@ -53,9 +51,33 @@ class Slot:
                     _ = channel.download(self.__index, processor, self.__view_queue)
                 except DownloadCancelled:
                     ...
+                except Exception as e:  # noqa: BLE001 - keep the slot alive
+                    self.__report_exception(channel, e)
                 finally:
-                    self.__channel = None
+                    if processor is not None:
+                        self.__close(processor)
+                    channel.set_inactive()
                     self.__ready = True
+
+    def __report_exception(self, channel: Channel, e: Exception):
+        message = f"{type(e).__name__}: {e}"
+        channel.report_error(message)
+        self.__view_queue.put(
+            ErrorMessage(
+                index=self.__index,
+                provider=Message.Provider.SLOT,
+                target=channel.get_name() or "",
+                message=message,
+            )
+        )
+        Debug.print(self.__index, "Unhandled exception:\n" + traceback.format_exc())
+
+    def __close(self, processor: YoutubeDL):
+        # Releases request handlers/sessions held by the processor
+        try:
+            processor.close()
+        except Exception:  # noqa: BLE001
+            Debug.print(self.__index, "Close failed:\n" + traceback.format_exc())
 
     def __setup(self, channel: Channel):
         hook = Hook(self.__view_queue, self.__halt_event, self.__index)

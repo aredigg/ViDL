@@ -2,7 +2,7 @@ import os
 from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
-from statistics import StatisticsError, median
+from statistics import median
 from time import time
 from typing import ClassVar
 
@@ -19,12 +19,13 @@ class View:
     ROW_MIN_SIZE: int = 12
     COL_MIN_SIZE: int = 120
     RING_SIZE: int = 20
+    BITRATE_MIN_ELAPSED: int = 10  # Seconds before an unknown-size bitrate is shown
     NF_PREFIX: str = ""
     NF_SUFFIX: str = ""
     NF_VIDEO: str = ""
     NF_AUDIO: str = ""
     NF_SUBTITLE: str = "󰨖"
-    INVALID_TIIME: str = "--:-- "
+    INVALID_TIME: str = "--:-- "
     ANIMATED: ClassVar[list[str]] = ["○", "●", "○", "●"]
     COUNTDOWN: ClassVar[list[str]] = [
         "   ",
@@ -85,29 +86,6 @@ class View:
                 case self.State.ERROR:
                     return ANSI.Color.Cerise + "✖" + ANSI.Color.DefaultFg
 
-        def abbreviation(self) -> str:
-            match self.state:
-                case self.State.INACTIVE:
-                    return "IN"
-                case self.State.WAITING:
-                    return "WT"
-                case self.State.SLEEPING:
-                    return "SP"
-                case self.State.DOWNLOAD:
-                    return "DL"
-                case self.State.DOWNLOAD_WAIT:
-                    return "DW"
-                case self.State.DOWNLOAD_REQ_WAIT:
-                    return "DR"
-                case self.State.PROCESS:
-                    return "PR"
-                case self.State.PROCESS_WAIT:
-                    return "PW"
-                case self.State.WARNING:
-                    return "WR"
-                case self.State.ERROR:
-                    return "ER"
-
         def emoji(self) -> str:
             match self.state:
                 case self.State.INACTIVE:
@@ -144,9 +122,8 @@ class View:
         origin_row: int = 1
         origin_col: int = 1
 
-    def __init__(self, border: bool = True, header: bool = False) -> None:
+    def __init__(self, header: bool = False) -> None:
         self.__size = View.Size(rows=1, cols=1)
-        self.__border = border
         self.__header = header
         self.__visible = False
         self.__top_index: int = 0
@@ -155,15 +132,13 @@ class View:
             self.__view_top_decorator = (View.NF_PREFIX, View.NF_SUFFIX)
         self.__status = View.Status(state=View.Status.State.INACTIVE)
         self.__timer: int | None = None
-        self.__time_divider: str = ":"
         self.__top = View.Top()
         self.__temp_filepath: str | None = None
         self.__playlist_length = 0
         self.__bitrate_ring: deque[int] = deque(maxlen=View.RING_SIZE)
-        self.__size_delta_ring: deque[int] = deque(maxlen=View.RING_SIZE)
-        self.__time_delta_ring: deque[float] = deque(maxlen=View.RING_SIZE)
-        self.__previous_elapsed = None
-        self.__previous_size = None
+        # (elapsed, size) samples, the window used for the average bitrate
+        self.__sample_ring: deque[tuple[float, int]] = deque(maxlen=View.RING_SIZE)
+        self.__remaining_time: tuple[int, bool] = (0, False)
         self.__item_entity: Item.Entity | None = None
         self.__item_progress: Item.Progress | None = None
         self.__item_media: Item.Media | None = None
@@ -227,11 +202,11 @@ class View:
         if self.__status.state == View.Status.State.DOWNLOAD:
             if self.__item_progress is not None:
                 if self.__item_progress.size_total:
-                    remaining_time, valid = self.__smooth_remaining_time()
+                    remaining_time, valid = self.__remaining_time
                     remaining_string = (
                         Util.format_seconds(remaining_time)
                         if valid
-                        else View.INVALID_TIIME
+                        else View.INVALID_TIME
                     )
                     eta = (
                         f"ETA {Util.get_time(int(time()) + remaining_time)}"
@@ -254,7 +229,7 @@ class View:
                     line = line + " " + f"{size:>6} MB"
                     if self.__timer is not None:
                         timer = max(1, int(time()) - self.__timer)
-                        if timer > 10:
+                        if timer > View.BITRATE_MIN_ELAPSED:
                             bitrate = (
                                 int(
                                     (int(self.__item_progress.size_current) << 3)
@@ -281,9 +256,7 @@ class View:
                 else:
                     color = ANSI.Color.NeonChartreuse
                 line = (
-                    line
-                    + f"  {self.__status.provider}: "
-                    + f"{color}{self.__status.message}{ANSI.Color.DefaultFg}"
+                    line + f"  {provider}: " + f"{color}{message}{ANSI.Color.DefaultFg}"
                 )
         self.__print(terminal, 2, line)
 
@@ -386,39 +359,37 @@ class View:
         meter = kind * progress + ANSI.Dim + kind * remaining + ANSI.DimReset
         return meter
 
+    # Called once per update cycle, the result is cached in __remaining_time
     def __smooth_remaining_time(self) -> tuple[int, bool]:
-        if self.__item_progress is not None:
-            elapsed = self.__item_progress.time_current
-            size = int(self.__item_progress.size_current)
-            if not (
-                len(self.__time_delta_ring) > 1 and len(self.__size_delta_ring) > 1
-            ):
-                self.__time_delta_ring.append(elapsed)
-                self.__size_delta_ring.append(size)
-            else:
-                if self.__previous_elapsed is None:
-                    self.__previous_elapsed = elapsed
-                    self.__previous_size = size
-                    return 0, False
-                self.__time_delta_ring.append(elapsed - self.__time_delta_ring[-1])
-                self.__size_delta_ring.append(size - self.__size_delta_ring[-1])
-                elapsed_delta = sum(self.__time_delta_ring)
-                size_delta = sum(self.__size_delta_ring)
-                bitrate = 0
-                if elapsed_delta and size_delta:
-                    bitrate = int((size_delta << 3) / elapsed_delta) >> 10
-                    self.__bitrate_ring.append(bitrate)
-                if len(self.__bitrate_ring) != View.RING_SIZE:
-                    return 0, False
-                remaining_bits = int(self.__item_progress.size_total - size) >> 7
-                try:
-                    bitrate = median([b for b in self.__bitrate_ring if b > 0])
-                except StatisticsError:
-                    ...
-                return (
-                    (int(remaining_bits / bitrate), True) if bitrate > 0 else (0, False)
-                )
-        return 0, False
+        progress = self.__item_progress
+        if (
+            self.__status.state != View.Status.State.DOWNLOAD
+            or progress is None
+            or not progress.size_total
+        ):
+            return 0, False
+        elapsed = progress.time_current
+        size = int(progress.size_current)
+        if self.__sample_ring:
+            previous_elapsed, previous_size = self.__sample_ring[-1]
+            # Progress restarts for each file, e.g. separate video and audio formats
+            if elapsed < previous_elapsed or size < previous_size:
+                self.__sample_ring.clear()
+        if not self.__sample_ring or elapsed > self.__sample_ring[-1][0]:
+            self.__sample_ring.append((elapsed, size))
+        # Average bitrate over the sample window
+        first_elapsed, first_size = self.__sample_ring[0]
+        last_elapsed, last_size = self.__sample_ring[-1]
+        elapsed_delta = last_elapsed - first_elapsed
+        size_delta = last_size - first_size
+        if elapsed_delta > 0 and size_delta > 0:
+            self.__bitrate_ring.append(int((size_delta << 3) / elapsed_delta) >> 10)
+        if len(self.__bitrate_ring) != View.RING_SIZE:
+            return 0, False
+        bitrates = [b for b in self.__bitrate_ring if b > 0]
+        bitrate = median(bitrates) if bitrates else 0
+        remaining_bits = int(progress.size_total - size) >> 7
+        return (int(remaining_bits / bitrate), True) if bitrate > 0 else (0, False)
 
     def __update_filesize(self) -> None:
         size_current = 0
@@ -435,6 +406,7 @@ class View:
                             | View.Status.State.DOWNLOAD_REQ_WAIT
                         ):
                             self.__status.state = View.Status.State.DOWNLOAD
+                            self.set_timer(0)
                         case _:
                             ...
                 except OSError:
@@ -465,16 +437,13 @@ class View:
         return self.__size
 
     def reset(self) -> None:
-        self.__time_divider = ":"
         self.__temp_filepath = None
         self.__item_entity = None
         self.__item_progress = None
         self.__item_media = None
-        self.__previous_elapsed = None
-        self.__previous_size = None
-        #    self.__bitrate_ring.clear()
-        self.__size_delta_ring.clear()
-        self.__time_delta_ring.clear()
+        # The bitrate ring is kept, as the previous download is a better starting point
+        self.__sample_ring.clear()
+        self.__remaining_time = (0, False)
 
     def set_top_index(self, index: int) -> None:
         self.__top_index = index
@@ -490,8 +459,9 @@ class View:
         if self.__header:
             self.__draw_header(terminal)
         else:
+            self.__update_filesize()
+            self.__remaining_time = self.__smooth_remaining_time()
             if self.__visible:
-                self.__update_filesize()
                 self.__item_line(terminal)
                 self.__media_line(terminal)
                 self.__draw_border(terminal)
@@ -519,7 +489,7 @@ class View:
                     return Util.format_seconds(min(0, int(time()) - self.__timer))
                 case _:
                     return Util.format_seconds(0)
-        return View.INVALID_TIIME
+        return View.INVALID_TIME
 
     def countdown(self) -> str:
         seconds = 0
@@ -530,22 +500,19 @@ class View:
                 | View.Status.State.DOWNLOAD_REQ_WAIT
             ):
                 if self.__timer is not None:
-                    seconds = int(time()) - self.__timer
+                    seconds = self.__timer - int(time())
             case View.Status.State.DOWNLOAD:
-                seconds, _ = self.__smooth_remaining_time()
+                seconds, _ = self.__remaining_time
             case _:
                 pass
         return (
             f" {View.COUNTDOWN[seconds]}"
-            if 0 < seconds < 10
+            if 0 < seconds < len(View.COUNTDOWN)
             else f" {View.COUNTDOWN[0]}"
         )
 
     def set_top(self, name: str) -> None:
         self.__top = View.Top(name=name)
-
-    def reset_top(self) -> None:
-        self.__top = View.Top()
 
     def set_visible(self, visible: bool):
         self.__visible = visible

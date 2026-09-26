@@ -4,7 +4,7 @@ import sys
 import threading
 import traceback
 from datetime import datetime, timezone
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, ExceptHookArgs, Thread
 from types import TracebackType
 from typing import cast
@@ -15,6 +15,7 @@ from .config import Config
 
 class Debug:
     BUFFER_SIZE: int = 16384
+    MAX_ROTATIONS: int = 1000  # Rotated files are suffixed .000 to .999
     buffer: str = ""
     wrapper: io.TextIOWrapper | None = None
     queue: Queue[tuple[int, str]] | None = None
@@ -40,28 +41,53 @@ class Debug:
 
     @staticmethod
     def __loop():
-        if (
-            (file_name := str(Config.settings["Debug"]["file_name"]))
-            and Debug.queue is not None
-            and Debug.inactive is not None
-        ):
-            with open(file_name, "a") as Debug.wrapper:
-                try:
-                    Debug.__write(-1, "=== Begin ===")
-                    while not Debug.inactive.is_set():
-                        slot_index, message = Debug.queue.get()
-                        if message:
-                            Debug.__write(slot_index, message)
-                        if Debug.__wrap_around(file_name):
-                            Debug.__write(-1, "=== Wrap ===")
-                            break
-                finally:
-                    Debug.__write(-1, "=== End ===")
-                    _ = Debug.wrapper.write(Debug.buffer)
-                    Debug.wrapper.flush()
-            if not Debug.inactive.is_set():
-                Debug.__wrap_move(file_name)
-                Debug.__loop()
+        file_name = str(Config.settings["Debug"]["file_name"])
+        if not file_name or Debug.queue is None or Debug.inactive is None:
+            return
+        while Debug.__write_file(file_name, Debug.queue, Debug.inactive):
+            Debug.__wrap_move(file_name)
+
+    # Returns True when the file has wrapped around and should be rotated
+    @staticmethod
+    def __write_file(
+        file_name: str, queue: Queue[tuple[int, str]], inactive: Event
+    ) -> bool:
+        wrapped = False
+        with open(file_name, "a", encoding="utf-8") as Debug.wrapper:
+            try:
+                Debug.__write(-1, "=== Begin ===")
+                while not inactive.is_set():
+                    slot_index, message = queue.get()
+                    if message:
+                        Debug.__write(slot_index, message)
+                    if Debug.__wrap_around(file_name):
+                        Debug.__write(-1, "=== Wrap ===")
+                        wrapped = True
+                        break
+                else:
+                    Debug.__drain(queue)
+            finally:
+                Debug.__write(-1, "=== End ===")
+                Debug.__flush()
+        Debug.wrapper = None
+        return wrapped and not inactive.is_set()
+
+    @staticmethod
+    def __drain(queue: Queue[tuple[int, str]]):
+        while True:
+            try:
+                slot_index, message = queue.get_nowait()
+            except Empty:
+                return
+            if message:
+                Debug.__write(slot_index, message)
+
+    @staticmethod
+    def __flush():
+        if Debug.wrapper is not None:
+            _ = Debug.wrapper.write(Debug.buffer)
+            Debug.wrapper.flush()
+            Debug.buffer = ""
 
     @staticmethod
     def __write(slot_index: int, message: str):
@@ -71,10 +97,8 @@ class Debug:
             Debug.buffer += f"{prefix} UTC > {message}\n"
         else:
             Debug.buffer += f"{prefix} UTC > SLOT-{slot_index + 1:02} > {message}\n"
-        if Debug.wrapper is not None and len(Debug.buffer) > Debug.BUFFER_SIZE:
-            _ = Debug.wrapper.write(Debug.buffer)
-            Debug.wrapper.flush()
-            Debug.buffer = ""
+        if len(Debug.buffer) > Debug.BUFFER_SIZE:
+            Debug.__flush()
 
     @staticmethod
     def __wrap_around(file_name: str) -> bool:
@@ -86,11 +110,11 @@ class Debug:
     @staticmethod
     def __wrap_move(file_name: str):
         count = 0
-        while count < 1000 and os.path.exists(f"{file_name}.{count:03}"):
+        while count < Debug.MAX_ROTATIONS and os.path.exists(f"{file_name}.{count:03}"):
             count += 1
-        if count == 1000:
-            os.remove(f"{file_name}.999")
+        if count == Debug.MAX_ROTATIONS:
             count -= 1
+            os.remove(f"{file_name}.{count:03}")
         for index in range(count - 1, -1, -1):
             os.rename(
                 f"{file_name}.{index:03}",

@@ -19,7 +19,6 @@ from .message import (
     ProgressMessage,
     RedrawMessage,
     SleepMessage,
-    UrlMessage,
     WarningMessage,
 )
 from .terminal import Terminal
@@ -33,12 +32,13 @@ class ViewController:
     updates_per_second: int = -(-UPDATES_PER_SECOND // len(View.ANIMATED)) * len(
         View.ANIMATED
     )
-    RUN_LOOP_WAIT: float = 1 / updates_per_second
+    TICK_NS: int = 1_000_000_000 // updates_per_second
+    # Message driven renders are coalesced to at most one per interval
+    MIN_RENDER_INTERVAL_NS: int = 100_000_000
 
     def __init__(self) -> None:
-        self.__ready: bool = False
-        self.__views: dict[int, View] = {}
-        #        self.__slots = set()
+        # The header exists before the thread starts, so halt() is always safe
+        self.__views: dict[int, View] = {View.HEADER: View(header=True)}
         self.__redraw_required = False
         self.__input_queue: Queue[str] = Queue()
         self.__queue: Queue[Message] = Queue()
@@ -49,46 +49,76 @@ class ViewController:
         self.__thread.start()
         ViewController.index += 1
 
+    # Rendering: a full update once per second (tacho 0), status lines on every
+    # tick for the animation, and message driven status updates in between,
+    # limited to MIN_RENDER_INTERVAL_NS
     def __run(self) -> None:
         with Terminal(self.__input_queue) as terminal:
-            self.__create_header()
             self.__redraw(terminal)
-            self.__ready = True
-            completed = False
+            full_update = True
+            pending = False
+            next_tick = 0
+            last_render = 0
             while not self.__halt_event.is_set():
-                try:
-                    message: Message = self.__queue.get(
-                        timeout=ViewController.RUN_LOOP_WAIT
+                deadline = next_tick
+                if pending or full_update:
+                    deadline = min(
+                        deadline, last_render + ViewController.MIN_RENDER_INTERVAL_NS
                     )
-                    if not isinstance(message, HaltMessage):
-                        self.__dispatch_message(message)
-                except Empty:
-                    ...
+                timeout = max(0, deadline - monotonic_ns()) / 1_000_000_000
+                if self.__process_messages(timeout):
+                    pending = True
                 if self.__redraw_required:
                     self.__redraw(terminal)
-                tacho = (
-                    (monotonic_ns() % 1_000_000_000)
-                    * ViewController.updates_per_second
-                    // 1_000_000_000
-                )
-                if tacho == 0 and not completed:
-                    title_bar: list[str] = []
-                    for view in self.__views.values():
-                        view.update(terminal, tacho)
-                        if view.get_top_index() > 0:
-                            title_bar.append(
-                                f"{view.get_top_index()} {view.get_status().emoji()}{view.countdown()}"
-                            )
-                    terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
-                    completed = True
+                    full_update = True
+                now = monotonic_ns()
+                tick = now // ViewController.TICK_NS
+                tacho = tick % ViewController.updates_per_second
+                due = now >= next_tick
+                if due:
+                    next_tick = (tick + 1) * ViewController.TICK_NS
+                    if tacho == 0:
+                        full_update = True
+                throttled = now - last_render < ViewController.MIN_RENDER_INTERVAL_NS
+                if not due and (throttled or not (pending or full_update)):
+                    continue
+                if full_update:
+                    self.__update(terminal, tacho)
                 else:
-                    completed = False
                     for view in self.__views.values():
                         view.update_status(terminal, tacho)
+                full_update = pending = False
+                last_render = now
                 terminal.flush()
 
-    def __create_header(self) -> None:
-        self.__views[View.HEADER] = View(header=True)
+    # Waits up to timeout for a message, then handles all queued messages
+    # within the render interval, returns True if any message was handled
+    def __process_messages(self, timeout: float) -> bool:
+        try:
+            message = self.__queue.get(timeout=timeout)
+        except Empty:
+            return False
+        budget_end = monotonic_ns() + ViewController.MIN_RENDER_INTERVAL_NS
+        while True:
+            if not isinstance(message, HaltMessage):
+                self.__dispatch_message(message)
+            if monotonic_ns() >= budget_end:
+                return True
+            try:
+                message = self.__queue.get_nowait()
+            except Empty:
+                return True
+
+    def __update(self, terminal: Terminal, tacho: int) -> None:
+        title_bar: list[str] = []
+        for view in self.__views.values():
+            view.update(terminal, tacho)
+            if view.get_top_index() > 0:
+                title_bar.append(
+                    f"{view.get_top_index()} "
+                    + f"{view.get_status().emoji()}{view.countdown()}"
+                )
+        terminal.print(ANSI.title_bar(" | ".join(title_bar)), 1, 1)
 
     def __redraw(self, terminal: Terminal) -> None:
         self.__redraw_required = False
@@ -118,7 +148,7 @@ class ViewController:
                     return
 
     @singledispatchmethod
-    def __dispatch_message(self, message: str) -> None:
+    def __dispatch_message(self, message: Message) -> None:
         raise NotImplementedError(
             f"Message type {type(message).__name__} not implemented"
         )
@@ -195,13 +225,6 @@ class ViewController:
             view.set_filepath(message.path)
 
     @__dispatch_message.register
-    def _(self, message: UrlMessage):
-        if message.index in self.__views:
-            ...
-            # view = self.__views[message.index]
-            # view.set_url(message.url)
-
-    @__dispatch_message.register
     def _(self, message: EntityMessage):
         if message.index in self.__views:
             view = self.__views[message.index]
@@ -268,14 +291,13 @@ class ViewController:
     def _(self, message: WarningMessage):
         if message.index in self.__views:
             view = self.__views[message.index]
-            if isinstance(message.provider, str):
-                view.set_status(
-                    status=View.Status(
-                        View.Status.State.WARNING,
-                        provider=message.target,
-                        message=message.message,
-                    )
+            view.set_status(
+                status=View.Status(
+                    View.Status.State.WARNING,
+                    provider=message.target,
+                    message=message.message,
                 )
+            )
 
     @__dispatch_message.register
     def _(self, message: ErrorMessage):
@@ -298,19 +320,11 @@ class ViewController:
                         message=message.message,
                     )
                 )
-            elif isinstance(message.provider, str):
-                view.set_status(
-                    status=View.Status(
-                        View.Status.State.ERROR,
-                        provider=f"{message.provider}/{message.target}",
-                        message=message.message,
-                    )
-                )
             else:
                 view.set_status(
                     status=View.Status(
                         View.Status.State.ERROR,
-                        provider=f"{message.provider}",
+                        provider=f"{message.provider.value}/{message.target}",
                         message=message.message,
                     )
                 )
@@ -327,7 +341,6 @@ class ViewController:
                 state=View.Status.State.INACTIVE, message="Shutdown in progress"
             )
         )
-        self.__ready = False
         self.__queue.put(HaltMessage())
         self.__halt_event.set()
 

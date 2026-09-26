@@ -1,5 +1,6 @@
+import csv
 from queue import Empty
-from signal import SIGTERM, SIGWINCH, signal
+from signal import SIG_IGN, SIGINT, SIGTERM, SIGWINCH, signal
 from time import sleep
 from types import FrameType
 from typing import cast
@@ -17,24 +18,29 @@ class Coordinator:
 
     def __init__(self) -> None:
         self.__running = True
+        self.__channels: list[Channel] = []
+        self.__slots: list[Slot] = []
+        self.__error: object = None
         self.__view = ViewController()
         self.__view_queue = self.__view.get_queue()
         self.__input_queue = self.__view.get_input_queue()
-        self.__channels = []
-        self.__slots = []
-        self.__error = None
+        # Threads are running from here on, they must be stopped if setup fails
         try:
-            self.__channels: list[Channel] = ChannelHelper.load_channels(
-                str(Config.settings["Channels"]["file_name"])
+            try:
+                self.__channels = ChannelHelper.load_channels(
+                    str(Config.settings["Channels"]["file_name"])
+                )
+            except (OSError, ValueError, csv.Error) as e:
+                self.__error = e
+                self.__running = False
+            number_of_slots = min(
+                max(1, cast(int, Config.settings["Channels"]["slots"] or 0)),
+                len(self.__channels),
             )
-        except FileNotFoundError as e:
-            self.__error = e
-            self.__running = False
-        number_of_slots = min(
-            max(1, cast(int, Config.settings["Channels"]["slots"] or 0)),
-            len(self.__channels),
-        )
-        self.__slots = [Slot(i, self.__view_queue) for i in range(number_of_slots)]
+            self.__slots = [Slot(i, self.__view_queue) for i in range(number_of_slots)]
+        except BaseException:
+            self.__stop()
+            raise
         _ = signal(SIGTERM, self.halt)
         _ = signal(SIGWINCH, self.redraw)
 
@@ -76,15 +82,21 @@ class Coordinator:
                 except KeyboardInterrupt:
                     self.__running = False
         finally:
-            for slot in self.__slots:
-                slot.halt()
-            for slot in self.__slots:
-                slot.join()
-            self.__view.halt()
-            self.__view.join()
+            self.__stop()
             self.__save_channels()
 
         return 3 if self.__error is not None else 0
+
+    def __stop(self):
+        # Shutdown is final, so Ctrl-C stays ignored from here on. An interrupted
+        # shutdown leaves threads running and the terminal in the alternate screen
+        _ = signal(SIGINT, SIG_IGN)
+        for slot in self.__slots:
+            slot.halt()
+        for slot in self.__slots:
+            slot.join()
+        self.__view.halt()
+        self.__view.join()
 
     def __next_channel(self):
         return min(

@@ -1,4 +1,4 @@
-# ViDL
+# 𓃥 ViDL
 
 Pretty CLI frontend to yt-dlp.
 
@@ -123,6 +123,19 @@ on exit.
 | `active`    | `False`   | Write a debug log                                                           |
 | `file_name` | `"debug"` | The debug log file                                                          |
 | `wrap_size` | `1024`    | The log is rotated when it exceeds this many 16 KiB blocks. Up to 1000 rotated files are kept, suffixed `.000` to `.999` |
+
+## Tests
+
+The tests use the standard library only, and do not access the network:
+
+```sh
+python tests/run.py              # all tests, reported per module
+python tests/run.py channel view # tests/test_channel.py and tests/test_view.py
+python tests/run.py -k cutoff    # tests with "cutoff" in their name
+python tests/run.py -q -x        # only problems and the summary, stop at the first
+```
+
+The exit status is 0 when all tests pass, 1 on failures or errors, and 2 when no tests match.
 
 ## Copyright
 

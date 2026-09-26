@@ -242,8 +242,10 @@ class View:
             if self.__status.provider or self.__status.message:
                 provider = self.__status.provider
                 message = self.__status.message
-                if (len(provider) + len(message)) > (self.__size.cols - 14):
-                    provider_len = self.__size.cols - 14 - len(message)
+                # The printable width, less the prefix, and the "  " and ": " separators
+                available = self.__size.cols - 8 - ANSI.len(line) - 4
+                if (len(provider) + len(message)) > available:
+                    provider_len = available - len(message)
                     if provider_len > 0:
                         provider = ANSI.trim(provider, provider_len)
                     else:

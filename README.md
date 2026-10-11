@@ -37,10 +37,44 @@ On the first run a default configuration is written. Set `Paths.output` and run 
 | Key               | Action                                           |
 |-------------------|--------------------------------------------------|
 | `q`               | Quit, running downloads are cancelled            |
-| `Ctrl-C`          | Same as `q`                                      |
+| `Ctrl-C`, `Ctrl-D`| Same as `q`                                      |
+| `c`               | Finish the running downloads, then quit. No new downloads are started, and the pause after a download is skipped. Press `c` again to continue normally, or `q` to quit at once |
+| `a`               | Add a channel or playlist, see below             |
 
 `SIGTERM` also triggers a graceful shutdown. Keyboard input is only read when standard input is
-a terminal.
+a terminal. Pasted text is never taken as key commands.
+
+### Adding channels while running
+
+`a` opens a prompt in the header. Type or paste an `http(s)` URL and press `Enter`, or press `Esc`
+to cancel. The prompt supports the usual line editing keys (arrows, `Home`/`End`, `Ctrl-A`/`Ctrl-E`,
+`Ctrl-U`, `Ctrl-K`, `Ctrl-W`). A URL that is already listed is rejected; the comparison ignores the
+case of the host name, a leading `www.` or `m.`, and a trailing `/`. The channel is saved to the
+channels file at once, and started next. When fewer slots are running than `Channels.slots` allows,
+an extra slot is started.
+
+This is the safe way to add channels while ViDL is running: the channels file is rewritten while
+running, so changes made to it by hand are lost.
+
+### Header
+
+The header shows the time and uptime, free space on the download and temporary directories (a
+single entry when both are on the same disk, colored below 10% and 2% free), the network status,
+and the yt-dlp version with available updates. When the terminal is narrow, the yt-dlp version is
+left out first, then the network status. A pending quit (`c`) or a back-off is shown below the
+title, and the key hints, prompt or the result of a command on the last line.
+
+### Errors and back-off
+
+Errors are shown in a short form in the panels and in the channels file, e.g.
+`abc123: Private video` or `Rate limited`. The full yt-dlp message is written to the debug log.
+
+Some errors indicate a temporary block by the site: bot checks, rate limits and
+`Video unavailable`. As a single `Video unavailable` may also just be a deleted video, all slots back
+off for 6 hours only when enough slots report such errors within 15 minutes of each other: one
+slot when only one is running, otherwise at least half of them and never fewer than two (2 slots:
+both, 3 or 4 slots: 2, 5 or 6 slots: 3). Downloads that are running complete first. Below the
+threshold, the slot pauses for 5 seconds and continues with the next video.
 
 ### Exit status
 
@@ -103,6 +137,8 @@ on exit.
 |------------------|------------|--------------------------------------------------------|
 | `cookie_browser` | `"safari"` | Browser to load cookies from, `None` to disable        |
 | `nerd_fonts`     | `True`     | Use Nerd Font glyphs in the panel decorations          |
+| `update_check`   | `True`     | Check PyPI for a newer yt-dlp at start and every 6 hours, shown in the header |
+| `network_check`  | `True`     | Check the network status every minute (a small request to YouTube), shown in the header |
 
 ### `[Download]`
 
@@ -115,6 +151,11 @@ on exit.
 | `resolution_defer`   | `0`     | Days. Newer videos are postponed to give higher resolutions time to become available, unless the video is already available above 2000 pixels in height. `0` disables |
 | `sleep_interval`     | `120`   | Seconds. Minimum pause after each download |
 | `post_sleep_cutoff`  | `60`    | Minutes. The pause after a download lasts as long as the download did, but never longer than this |
+| `metadata`           | `True`  | Write metadata to new downloads: title, date, description, the channel as show, and the episode number, counted from the oldest video of the playlist or channel tab |
+| `thumbnail`          | `"channel"` | Cover image embedded in new downloads: `"channel"` for the channel avatar (the video thumbnail when there is none), `"video"` for the video thumbnail, `None` for none |
+
+Metadata and cover images are only written to files downloaded in the same run. Files that already
+exist are never changed.
 
 ### `[Debug]`
 

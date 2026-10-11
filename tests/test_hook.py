@@ -21,6 +21,8 @@ class TestHook(unittest.TestCase):
     def test_process_names(self):
         self.assertEqual(Hook.State.process("Merger"), "Merge")
         self.assertEqual(Hook.State.process("MoveFiles"), "Move")
+        self.assertEqual(Hook.State.process("Metadata"), "Metadata")
+        self.assertEqual(Hook.State.process("EmbedThumbnail"), "Thumbnail")
         self.assertEqual(Hook.State.process("FixupM3u8"), "Normalize")
         self.assertEqual(Hook.State.process("Progress"), "Progress")
         self.assertEqual(Hook.State.process("Unknown"), "Unknown")

@@ -1,24 +1,34 @@
 # pyright: standard
+import os
 import time
 import unittest
+from unittest import mock
 
-from tests.helpers import IsolatedTestCase, private, wait_until
+from tests.helpers import IsolatedTestCase, drain, private, wait_until
+from vidl.ansi import ANSI
+from vidl.command import AddChannelCommand, Command, DrainCommand, QuitCommand
 from vidl.item import Item
+from vidl.keyboard import Key, LineEditor
 from vidl.message import (
     CountMessage,
     CutoffMessage,
     EntityMessage,
     ErrorMessage,
+    HeaderMessage,
     InfoMessage,
     InitMessage,
+    InputMessage,
     MediaMessage,
     Message,
+    NoticeMessage,
     PathMessage,
     ProgressMessage,
     RedrawMessage,
     SleepMessage,
+    SystemStatusMessage,
     WarningMessage,
 )
+from vidl.monitor import SystemStatus
 from vidl.view import View
 from vidl.view_controller import ViewController
 
@@ -162,11 +172,15 @@ class TestDispatch(ControllerTestCase):
 
     def test_errors(self):
         cases = (
+            # The message is never split, e.g. on the colon of an HTTP error
             (
                 ErrorMessage(
-                    index=0, provider=CHANNEL, target="t", message="id: failed"
+                    index=0,
+                    provider=CHANNEL,
+                    target="t",
+                    message="HTTP Error 429: Too Many Requests",
                 ),
-                ("id", "failed"),
+                ("t", "HTTP Error 429: Too Many Requests"),
             ),
             (
                 ErrorMessage(index=0, provider=CHANNEL, target="t", message="failed"),
@@ -186,6 +200,40 @@ class TestDispatch(ControllerTestCase):
                     (State.ERROR, provider, text),
                 )
 
+    def header(self) -> View:
+        return self.views(self.controller)[View.HEADER]
+
+    def keys(self, *keys: Key) -> None:
+        self.dispatch(InputMessage(keys=keys))
+
+    def commands(self) -> list[Command]:
+        return drain(self.controller.get_command_queue())
+
+    def test_keys_become_commands(self):
+        self.keys(Key("char", "c"), Key("char", "x"), Key("char", "q"))
+        self.assertEqual(self.commands(), [DrainCommand(), QuitCommand()])
+
+    def test_the_prompt_is_shown_in_the_header(self):
+        self.keys(Key("char", "a"), Key("paste", "https://x"))
+        prompt = private(self.header(), View, "prompt")
+        self.assertIsNotNone(prompt)
+        label, editor = prompt
+        self.assertIsInstance(editor, LineEditor)
+        self.assertEqual((label, editor.text), ("Add channel", "https://x"))
+        self.keys(Key("enter"))
+        self.assertIsNone(private(self.header(), View, "prompt"))
+        self.assertEqual(self.commands(), [AddChannelCommand("https://x")])
+
+    def test_header_notice_and_system_status(self):
+        self.dispatch(HeaderMessage(status="Finishing", title="⏹️"))
+        self.assertEqual(private(self.header(), View, "header_status"), "Finishing")
+        self.assertEqual(private(self.controller, ViewController, "title"), "⏹️")
+        self.dispatch(NoticeMessage(text="Added", error=False))
+        self.assertEqual(private(self.header(), View, "notice")[:2], ("Added", False))
+        status = SystemStatus()
+        self.dispatch(SystemStatusMessage(status=status))
+        self.assertIs(private(self.header(), View, "system"), status)
+
 
 class TestRunning(ControllerTestCase):
     def test_halt_right_after_start_never_hangs(self):
@@ -202,7 +250,33 @@ class TestRunning(ControllerTestCase):
 
     def test_queues(self):
         controller = self.start()
-        self.assertIsNot(controller.get_queue(), controller.get_input_queue())
+        self.assertIsNot(controller.get_queue(), controller.get_command_queue())
+
+    def test_title_bar_shows_the_header_title(self):
+        controller = self.start()
+        controller.get_queue().put(InitMessage(index=0, provider=SLOT))
+        controller.get_queue().put(HeaderMessage(status="s", title="💤 12:00"))
+        self.assertTrue(
+            wait_until(lambda: "\x1b]2;💤 12:00 | 1 " in self.stdout.getvalue())
+        )
+
+    def test_cursor_is_hidden_without_a_prompt(self):
+        controller = self.start()
+        self.assertTrue(wait_until(lambda: "ViDL" in self.stdout.getvalue()))
+        self.stop(controller)
+        output = self.stdout.getvalue()
+        # Only leaving the alternate screen shows the cursor again
+        self.assertEqual(output.count(ANSI.CursorShow), 1)
+        self.assertTrue(output.endswith(ANSI.Alternate.Leave))
+
+    def test_cursor_is_placed_in_an_open_prompt(self):
+        controller = self.start()
+        controller.get_queue().put(InputMessage(keys=(Key("char", "a"),)))
+        self.assertTrue(wait_until(lambda: ANSI.CursorShow in self.stdout.getvalue()))
+        self.stop(controller)
+        output = self.stdout.getvalue()
+        position = ANSI.print("", 4, View.HEADER_COL + len("Add channel: "))
+        self.assertIn(position + ANSI.CursorShow, output)
 
     def test_panels_are_drawn(self):
         controller = self.start()
@@ -214,6 +288,28 @@ class TestRunning(ControllerTestCase):
         self.assertIn("ViDL", output)
         blank = View.COUNTDOWN[0]
         self.assertIn(f"\x1b]2;1 ⚫ {blank} | 2 ⚫ {blank}\x1b\\", output)
+
+    def test_hidden_panels_do_not_draw_over_visible_panels(self):
+        # Three panels per row fit in 362 columns, only two in 254. Panel 5 is
+        # then hidden, and its old status line position lies inside panel 4.
+        size = {"now": os.terminal_size((362, 40))}
+        with mock.patch("vidl.terminal.size", side_effect=lambda: size["now"]):
+            controller = self.start()
+            queue = controller.get_queue()
+            for index in range(6):
+                queue.put(InitMessage(index=index, provider=SLOT))
+            self.assertTrue(wait_until(lambda: len(self.views(controller)) == 7))
+            time.sleep(0.3)
+            hidden = self.views(controller)[4]
+            size["now"] = os.terminal_size((254, 40))
+            queue.put(RedrawMessage())
+            self.assertTrue(wait_until(lambda: not private(hidden, View, "visible")))
+            after_resize = len(self.stdout.getvalue())
+            time.sleep(0.6)
+            self.stop(controller)
+        old = private(hidden, View, "size")
+        old_status_position = f"\x1b[{old.origin_row + 2};{old.origin_col + 4}H"
+        self.assertNotIn(old_status_position, self.stdout.getvalue()[after_resize:])
 
     def test_layout_hides_panels_that_do_not_fit(self):
         controller = self.start()

@@ -3,12 +3,15 @@ from collections import deque
 from dataclasses import dataclass, replace
 from enum import Enum
 from statistics import median
-from time import time
+from time import monotonic, time
 from typing import ClassVar
 
 from .ansi import ANSI
 from .config import Config
+from .controls import Controls
 from .item import Item
+from .keyboard import LineEditor
+from .monitor import NetworkState, SystemStatus, format_bytes
 from .terminal import Terminal
 from .util import Util
 
@@ -26,6 +29,13 @@ class View:
     NF_AUDIO: str = ""
     NF_SUBTITLE: str = "󰨖"
     INVALID_TIME: str = "--:-- "
+    # Header layout: content starts at HEADER_COL and ends before the last column
+    HEADER_COL: int = 10
+    HEADER_INPUT_ROW: int = 4
+    NOTICE_SECONDS: float = 6.0
+    SEGMENT_SEPARATOR: str = " · "
+    DISK_WARNING: float = 0.10
+    DISK_ERROR: float = 0.02
     ANIMATED: ClassVar[list[str]] = ["○", "●", "○", "●"]
     COUNTDOWN: ClassVar[list[str]] = [
         "   ",
@@ -142,15 +152,127 @@ class View:
         self.__item_entity: Item.Entity | None = None
         self.__item_progress: Item.Progress | None = None
         self.__item_media: Item.Media | None = None
+        # Header only
+        self.__started = monotonic()
+        self.__header_status = ""
+        self.__notice: tuple[str, bool, float] | None = None  # text, error, until
+        self.__system: SystemStatus | None = None
+        self.__prompt: tuple[str, LineEditor] | None = None
+        self.__cursor: tuple[int, int] | None = None
 
     def __draw_header(self, terminal: Terminal) -> None:
-        line = "𓃥  ViDL"
-        if ANSI.len(line) < self.__size.cols - 10:
-            terminal.print(line, 2, 10)
-        if self.__status.message:
-            line = f" --- {ANSI.Color.FashionBlue}{self.__status.message}{ANSI.Color.DefaultFg}"
-            if ANSI.len(line) < self.__size.cols - 10:
-                terminal.print(line, 3, 10)
+        width = self.__header_width()
+        if width <= 0:
+            return
+        uptime = Util.format_uptime(monotonic() - self.__started)
+        line = View.__compose("𓃥  ViDL", [f"{Util.get_time()}  up {uptime}"], width)
+        terminal.print(line, self.__size.origin_row + 1, View.HEADER_COL)
+        status = self.__status.message or self.__header_status
+        left = (
+            f" --- {ANSI.Color.FashionBlue}{status}{ANSI.Color.DefaultFg}"
+            if status
+            else ""
+        )
+        line = View.__compose(left, self.__system_segments(), width)
+        terminal.print(line, self.__size.origin_row + 2, View.HEADER_COL)
+        self.__draw_input(terminal)
+
+    # The prompt while one is open, otherwise a recent notice, or the key hints
+    def __draw_input(self, terminal: Terminal) -> None:
+        self.__cursor = None
+        width = self.__header_width()
+        if width <= 0:
+            return
+        row = self.__size.origin_row + View.HEADER_INPUT_ROW - 1
+        if self.__prompt is not None:
+            label, editor = self.__prompt
+            hint = f"  {ANSI.Dim}{Controls.PROMPT_HINT}{ANSI.DimReset}"
+            label = f"{label}: "
+            if ANSI.len(label) + ANSI.len(hint) + 10 > width:
+                hint = ""
+            field = width - ANSI.len(label) - ANSI.len(hint)
+            if field < 1:
+                label, field = "", width - ANSI.len(hint)
+            visible, cursor = editor.render(field)
+            line = label + visible
+            line += " " * max(0, width - ANSI.len(line) - ANSI.len(hint)) + hint
+            terminal.print(line, row, View.HEADER_COL)
+            self.__cursor = (row, View.HEADER_COL + ANSI.len(label) + cursor)
+            return
+        if self.__notice is not None and monotonic() >= self.__notice[2]:
+            self.__notice = None
+        if self.__notice is not None:
+            text, error, _ = self.__notice
+            color = ANSI.Color.Cerise if error else ANSI.Color.NeonChartreuse
+            line = f"{color}{ANSI.ellipsize(text, width)}{ANSI.Color.DefaultFg}"
+        else:
+            hints = ANSI.ellipsize(Controls.HINTS, width)
+            line = f"{ANSI.Dim}{hints}{ANSI.DimReset}"
+        line += " " * max(0, width - ANSI.len(line))
+        terminal.print(line, row, View.HEADER_COL)
+
+    def __header_width(self) -> int:
+        return self.__size.cols - View.HEADER_COL - 1
+
+    # The left text, and as many right aligned segments as fit, in priority
+    # order, padded to the width
+    @staticmethod
+    def __compose(left: str, segments: list[str], width: int) -> str:
+        segments = [segment for segment in segments if segment]
+        while segments:
+            right = View.SEGMENT_SEPARATOR.join(segments)
+            if ANSI.len(left) + 2 + ANSI.len(right) <= width:
+                break
+            _ = segments.pop()
+        right = View.SEGMENT_SEPARATOR.join(segments)
+        space = width - ANSI.len(right) - (2 if right else 0)
+        left = ANSI.ellipsize(left, space)
+        padding = max(0, width - ANSI.len(left) - ANSI.len(right))
+        return left + " " * padding + right
+
+    # Highest priority first: disk space, network, yt-dlp version
+    def __system_segments(self) -> list[str]:
+        system = self.__system
+        if system is None:
+            return []
+        segments: list[str] = []
+        for disk in system.disks:
+            ratio = disk.free_ratio
+            if disk.error is not None or ratio is None:
+                text = f"{disk.label} {disk.error or 'unavailable'}"
+                segments.append(View.__colored(text, ANSI.Color.Cerise))
+                continue
+            text = f"{disk.label} {format_bytes(disk.free)} free ({ratio:.0%})"
+            if ratio < View.DISK_ERROR:
+                text = View.__colored(text, ANSI.Color.Cerise)
+            elif ratio < View.DISK_WARNING:
+                text = View.__colored(text, ANSI.Color.BurntSienna)
+            segments.append(text)
+        match system.network:
+            case NetworkState.ONLINE:
+                segments.append("online")
+            case NetworkState.DEGRADED:
+                errors = system.network_errors
+                text = f"degraded ({errors} error{'s' if errors != 1 else ''})"
+                segments.append(View.__colored(text, ANSI.Color.BurntSienna))
+            case NetworkState.OFFLINE:
+                segments.append(View.__colored("offline", ANSI.Color.Cerise))
+            case NetworkState.UNKNOWN:
+                pass
+        version = system.version
+        if version.restart_required:
+            text = f"yt-dlp {version.running}, restart for {version.installed}"
+            segments.append(View.__colored(text, ANSI.Color.BurntSienna))
+        elif version.outdated:
+            text = f"yt-dlp {version.running} → {version.latest}"
+            segments.append(View.__colored(text, ANSI.Color.BurntSienna))
+        else:
+            segments.append(f"yt-dlp {version.running}")
+        return segments
+
+    @staticmethod
+    def __colored(text: str, color: str) -> str:
+        return f"{color}{text}{ANSI.Color.DefaultFg}"
 
     def __draw_border(self, terminal: Terminal) -> None:
         title = ""
@@ -244,12 +366,15 @@ class View:
                 message = self.__status.message
                 # The printable width, less the prefix, and the "  " and ": " separators
                 available = self.__size.cols - 8 - ANSI.len(line) - 4
-                if (len(provider) + len(message)) > available:
-                    provider_len = available - len(message)
-                    if provider_len > 0:
-                        provider = ANSI.trim(provider, provider_len)
-                    else:
-                        provider = ""
+                # The message is kept over the provider, cuts are marked with …
+                if provider and ANSI.len(provider) + ANSI.len(message) > available:
+                    space = available - ANSI.len(message)
+                    provider = ANSI.ellipsize(provider, space) if space >= 2 else ""
+                separator = ": "
+                if not provider:
+                    separator = ""
+                    available += 2
+                message = ANSI.ellipsize(message, available)
                 color = ""
                 if self.__status.state == View.Status.State.ERROR:
                     color = ANSI.Color.Cerise
@@ -258,7 +383,9 @@ class View:
                 else:
                     color = ANSI.Color.NeonChartreuse
                 line = (
-                    line + f"  {provider}: " + f"{color}{message}{ANSI.Color.DefaultFg}"
+                    line
+                    + f"  {provider}{separator}"
+                    + f"{color}{message}{ANSI.Color.DefaultFg}"
                 )
         self.__print(terminal, 2, line)
 
@@ -454,7 +581,11 @@ class View:
         return self.__top_index
 
     def update_status(self, terminal: Terminal, sequence: int) -> None:
-        if not self.__header:
+        if self.__header:
+            # Typing is shown without waiting for the next full update
+            self.__draw_input(terminal)
+        # Hidden views keep their last position, which may belong to another view
+        elif self.__visible:
             self.__status_line(terminal, sequence)
 
     def update(self, terminal: Terminal, sequence: int) -> None:
@@ -471,6 +602,24 @@ class View:
 
     def set_status(self, status: Status) -> None:
         self.__status = status
+
+    # ----- Header only
+
+    def set_header_status(self, status: str) -> None:
+        self.__header_status = status
+
+    def set_notice(self, text: str, error: bool = False) -> None:
+        self.__notice = (text, error, monotonic() + View.NOTICE_SECONDS)
+
+    def set_system_status(self, status: SystemStatus) -> None:
+        self.__system = status
+
+    def set_prompt(self, prompt: tuple[str, LineEditor] | None) -> None:
+        self.__prompt = prompt
+
+    # Where the terminal cursor belongs after drawing, None to hide it
+    def cursor_position(self) -> tuple[int, int] | None:
+        return self.__cursor
 
     def get_status(self) -> Status:
         return self.__status

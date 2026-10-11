@@ -2,6 +2,7 @@
 import os
 import stat
 import sys
+import threading
 import time
 import unittest
 from queue import Queue
@@ -9,9 +10,11 @@ from threading import Event
 from typing import Any, TypeVar, cast
 from unittest import mock
 
+from yt_dlp.networking.exceptions import TransportError
 from yt_dlp.utils import DownloadError, ExtractorError
 
 from tests.helpers import FakeProcessor, IsolatedTestCase, drain, playlist, video
+from vidl.backoff import Backoff
 from vidl.channel import Channel, ChannelHelper
 from vidl.config import Config
 from vidl.message import (
@@ -25,6 +28,8 @@ from vidl.message import (
     PathMessage,
     SleepMessage,
 )
+from vidl.metadata import MetadataContext, MetadataPostProcessor
+from vidl.shared import Shared
 from vidl.util import Util
 
 DAY = Util.SECONDS_PER_DAY
@@ -58,12 +63,19 @@ class ChannelTestCase(IsolatedTestCase):
         self.halt = Event()
 
     def run_channel(
-        self, processor: FakeProcessor, url: str = "https://c"
+        self,
+        processor: FakeProcessor,
+        url: str = "https://c",
+        shared: Shared | None = None,
+        slot: int = 0,
+        metadata: MetadataPostProcessor | None = None,
     ) -> tuple[Channel, bool]:
         channel = Channel(url, None, None, None, None)
         channel.set_halt_event(self.halt)
+        channel.set_shared(shared)
+        channel.set_metadata_processor(metadata)
         channel.set_active()
-        result = channel.download(0, processor.processor, self.queue)
+        result = channel.download(slot, processor.processor, self.queue)
         return channel, result
 
     def messages(self, cls: type[M]) -> list[M]:
@@ -152,19 +164,26 @@ class TestVideo(ChannelTestCase):
 
         def download(_: str) -> None:
             clock[0] = 500.0  # the download takes 500 s
-            self.halt.set()  # ends the sleep at once
 
         processor.on_download = download
-        started = time.monotonic()
-        with mock.patch("vidl.channel.time", side_effect=lambda: clock[0]):
+        sleeps: list[float] = []
+
+        def sleep(_: Channel, seconds: float) -> bool:
+            sleeps.append(seconds)
+            return False
+
+        with (
+            mock.patch("vidl.channel.time", side_effect=lambda: clock[0]),
+            mock.patch.object(Channel, "_Channel__sleep", sleep),
+        ):
             self.run_channel(processor)
-        self.assertLess(time.monotonic() - started, 5)
         (post_sleep,) = [
             m
             for m in self.messages(SleepMessage)
             if m.provider == Message.Provider.CHANNEL
         ]
         self.assertEqual(post_sleep.sleep_time, 60)  # capped at post_sleep_cutoff
+        self.assertEqual(sleeps, [60])
 
     def test_halt_ends_the_sleep_after_download(self):
         Config.settings["Download"]["sleep_interval"] = 30
@@ -174,6 +193,18 @@ class TestVideo(ChannelTestCase):
         _, result = self.run_channel(processor)
         self.assertTrue(result)
         self.assertLess(time.monotonic() - started, 5)
+
+    def test_halt_during_the_sleep_after_download_ends_it(self):
+        Config.settings["Download"]["sleep_interval"] = 30
+        processor = FakeProcessor({"https://c": video("vid")})
+        timer = threading.Timer(0.2, self.halt.set)
+        self.addCleanup(timer.cancel)
+        processor.on_download = lambda _: timer.start()
+        started = time.monotonic()
+        channel, result = self.run_channel(processor)
+        self.assertTrue(result)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertIsNone(channel.get_last_error())
 
     def test_vertical_video_is_archived_and_skipped(self):
         processor = FakeProcessor(
@@ -249,9 +280,7 @@ class TestVideo(ChannelTestCase):
         )
         channel, result = self.run_channel(processor)
         self.assertFalse(result)
-        self.assertEqual(
-            channel.get_last_error(), "vid: Requested format is not available"
-        )
+        self.assertEqual(channel.get_last_error(), "vid: Format not available")
 
     def test_name_is_used_as_url_when_url_is_missing(self):
         processor = FakeProcessor({"https://c": video("vid")})
@@ -276,12 +305,11 @@ class TestErrors(ChannelTestCase):
         self.assertFalse(result)
         self.assertEqual(channel.get_last_error(), "abc: Private video")
         (message,) = self.messages(ErrorMessage)
-        self.assertEqual(
-            (message.target, message.message), ("abc", "abc: Private video")
-        )
+        self.assertEqual((message.target, message.message), ("abc", "Private video"))
 
     def test_other_download_error(self):
-        # yt-dlp passes an empty exc_info when not handling an exception
+        # yt-dlp passes an empty exc_info when not handling an exception. "page"
+        # does not look like an id, so the message is not split
         error = DownloadError(
             "ERROR: [generic] page: Unable to download: timeout",
             cast(Any, (None, None, None)),
@@ -290,23 +318,78 @@ class TestErrors(ChannelTestCase):
         channel, result = self.run_channel(processor)
         self.assertFalse(result)
         (message,) = self.messages(ErrorMessage)
-        self.assertEqual(message.target, "page")
-        self.assertEqual(channel.get_last_error(), " Unable to download: timeout")
+        self.assertEqual(message.target, "https://c")
+        self.assertEqual(message.message, "page: Unable to download: timeout")
+        self.assertEqual(channel.get_last_error(), "page: Unable to download: timeout")
 
-    def test_video_unavailable_triggers_backoff(self):
-        error = ExtractorError(
-            "Video unavailable", video_id="abc", expected=True, ie=cast(Any, "youtube")
-        )
+    def test_messages_with_urls_and_times_are_not_split(self):
+        text = "Premieres in 12:30 at https://www.youtube.com/watch?v=x: soon"
+        error = ExtractorError(text, video_id="vid12345678", expected=True)
         processor = FakeProcessor({"https://c": download_error(error)})
-        with (
-            mock.patch.object(Channel, "BACKOFF_GRACE", 0),
-            mock.patch.object(Channel, "BACKOFF_SLEEP", 0),
-        ):
-            self.run_channel(processor)
-        sleeps = self.messages(SleepMessage)
-        self.assertEqual(len(sleeps), 1)
-        self.assertTrue(sleeps[0].required)
-        self.assertEqual(sleeps[0].provider, Message.Provider.CHANNEL)
+        channel, _ = self.run_channel(processor)
+        (message,) = self.messages(ErrorMessage)
+        self.assertEqual(message.target, "vid12345678")
+        self.assertNotIn("https", message.message)
+        self.assertTrue(cast(str, channel.get_last_error()).startswith("vid12345678: "))
+
+    def test_error_summary_is_short(self):
+        long_text = "Something odd happened " + "and more words " * 20
+        error = ExtractorError(long_text, video_id="abc", expected=True)
+        processor = FakeProcessor({"https://c": download_error(error)})
+        channel, _ = self.run_channel(processor)
+        (message,) = self.messages(ErrorMessage)
+        self.assertLessEqual(len(message.message), 60)
+        self.assertTrue(message.message.endswith("…"))
+        self.assertLessEqual(len(cast(str, channel.get_last_error())), 65)
+
+    def test_logger_errors_are_stored_in_the_short_form(self):
+        channel = Channel("a", None, None, None, None)
+        channel.report_error(
+            "[youtube] abc123: Private video. Sign in if you've been granted access"
+        )
+        self.assertEqual(channel.get_last_error(), "abc123: Private video")
+
+    def test_failures_are_stored_bounded_on_one_line(self):
+        channel = Channel("a", None, None, None, None)
+        channel.report_failure("RuntimeError:\n" + "x" * 500)
+        error = cast(str, channel.get_last_error())
+        self.assertEqual(len(error), Channel.FAILURE_MAX)
+        self.assertNotIn("\n", error)
+        self.assertTrue(error.startswith("RuntimeError: x") and error.endswith("…"))
+
+    def test_network_errors_are_reported(self):
+        reports: list[str] = []
+        shared = Shared(
+            network_error=lambda: reports.append("error"),
+            network_success=lambda: reports.append("success"),
+        )
+        error = download_error(TransportError("connection reset"))
+        processor = FakeProcessor(
+            {
+                "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+                "https://v/a": error,
+                "https://v/b": video("b"),
+            }
+        )
+        self.run_channel(processor, shared=shared)
+        self.assertEqual(reports[0], "error")
+        self.assertIn("success", reports[1:])
+
+    def test_restriction_without_back_off_pauses_briefly(self):
+        # Without shared state there is no back-off, only the grace pause
+        error = ExtractorError("Video unavailable", video_id="abc", expected=True)
+        processor = FakeProcessor({"https://c": download_error(error)})
+        sleeps: list[float] = []
+
+        def sleep(_: Channel, seconds: float) -> bool:
+            sleeps.append(seconds)
+            return False
+
+        with mock.patch.object(Channel, "_Channel__sleep", sleep):
+            channel, _ = self.run_channel(processor)
+        self.assertEqual(sleeps, [Channel.BACKOFF_GRACE])
+        self.assertEqual(channel.get_last_error(), "abc: Video unavailable")
+        self.assertEqual(self.messages(SleepMessage), [])
 
     def test_halt_during_backoff_grace_skips_the_sleep(self):
         error = ExtractorError("Video unavailable", video_id="abc", expected=True)
@@ -453,9 +536,40 @@ class TestPlaylist(ChannelTestCase):
             return playlist("p", ["https://v/a"])
 
         processor = FakeProcessor({"https://c": listing, "https://v/a": video("a")})
-        _, result = self.run_channel(processor)
-        self.assertTrue(result)
+        channel, result = self.run_channel(processor)
+        # Not completed, so it is neither a download nor an error
+        self.assertFalse(result)
+        self.assertTrue(channel.interrupted())
         self.assertEqual(processor.extracted, ["https://c"])
+        self.assertEqual(channel.row()[2], 0)
+        self.assertIsNone(channel.get_last_error())
+
+    def test_halt_between_entries_does_not_record_a_download(self):
+        processor = FakeProcessor(
+            {
+                "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+                "https://v/a": video("a"),
+                "https://v/b": video("b"),
+            }
+        )
+        processor.on_download = lambda _: self.halt.set()
+        channel = Channel("https://c", None, None, None, "old error")
+        channel.set_halt_event(self.halt)
+        self.assertFalse(channel.download(0, processor.processor, self.queue))
+        self.assertEqual(self.downloaded_ids(processor), ["a"])
+        self.assertTrue(channel.interrupted())
+        self.assertEqual(channel.row()[2], 0)
+        self.assertEqual(channel.get_last_error(), "old error")
+
+    def test_positions_count_entries_without_url(self):
+        info = playlist("p", [])
+        info["entries"] = [{"title": "no url"}, {"url": "https://v/b"}]
+        processor = FakeProcessor({"https://c": info, "https://v/b": video("b")})
+        self.run_channel(processor)
+        indexes = [
+            m.entity.index for m in self.messages(EntityMessage) if m.entity.id == "b"
+        ]
+        self.assertEqual(indexes, [2])
 
     def test_empty_playlist(self):
         processor = FakeProcessor({"https://c": playlist("p", [])})
@@ -463,6 +577,369 @@ class TestPlaylist(ChannelTestCase):
         self.assertTrue(result)
         self.assertTrue(channel.is_playlist())
         self.assertEqual(self.messages(CountMessage), [])
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def unavailable(video_id: str = "abc") -> DownloadError:
+    return download_error(
+        ExtractorError("Video unavailable", video_id=video_id, expected=True)
+    )
+
+
+class SleepRecorder:
+    """Replaces Channel.__sleep with patch(), records the requested times."""
+
+    def __init__(self) -> None:
+        self.sleeps: list[float] = []
+
+    def patch(self) -> Any:
+        def sleep(_channel: Channel, seconds: float) -> bool:
+            self.sleeps.append(seconds)
+            return False
+
+        return mock.patch.object(Channel, "_Channel__sleep", sleep)
+
+
+class TestBackoff(ChannelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.clock = FakeClock()
+        self.recorder = SleepRecorder()
+        patcher = self.recorder.patch()
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        step = mock.patch.object(Backoff, "WAIT_STEP", 0.01)
+        step.start()
+        self.addCleanup(step.stop)
+
+    def shared(self, slots: int) -> Shared:
+        return Shared(backoff=Backoff(slots=slots, clock=self.clock))
+
+    def test_single_slot_restriction_starts_the_back_off(self):
+        shared = self.shared(1)
+        channel, result = self.run_channel(
+            FakeProcessor({"https://c": unavailable()}), shared=shared
+        )
+        self.assertFalse(result)
+        self.assertTrue(shared.backoff.active())
+        self.assertEqual(channel.get_last_error(), "abc: Video unavailable")
+        self.assertEqual(self.recorder.sleeps, [])  # no grace pause
+
+    def test_restriction_in_one_of_two_slots_only_pauses(self):
+        shared = self.shared(2)
+        self.run_channel(FakeProcessor({"https://c": unavailable()}), shared=shared)
+        self.assertFalse(shared.backoff.active())
+        self.assertEqual(self.recorder.sleeps, [Channel.BACKOFF_GRACE])
+
+    def test_restrictions_in_both_slots_start_the_back_off(self):
+        shared = self.shared(2)
+        processor = FakeProcessor({"https://c": unavailable()})
+        self.run_channel(processor, shared=shared, slot=0)
+        self.assertFalse(shared.backoff.active())
+        self.run_channel(processor, shared=shared, slot=1)
+        self.assertTrue(shared.backoff.active())
+        self.assertEqual(self.recorder.sleeps, [Channel.BACKOFF_GRACE])
+
+    def test_the_same_slot_twice_does_not_start_the_back_off(self):
+        shared = self.shared(2)
+        processor = FakeProcessor({"https://c": unavailable()})
+        self.run_channel(processor, shared=shared, slot=0)
+        self.run_channel(processor, shared=shared, slot=0)
+        self.assertFalse(shared.backoff.active())
+
+    def test_rate_limits_and_bot_checks_are_restrictions(self):
+        for text in (
+            "Sign in to confirm you’re not a bot",
+            "This content isn't available, try again later.",
+            "HTTP Error 429: Too Many Requests",
+        ):
+            with self.subTest(text=text):
+                shared = self.shared(1)
+                error = download_error(ExtractorError(text, expected=True))
+                self.run_channel(FakeProcessor({"https://c": error}), shared=shared)
+                self.assertTrue(shared.backoff.active())
+
+    def test_permanent_errors_do_not_count(self):
+        shared = self.shared(1)
+        for text in ("Private video", "This video has been removed by the uploader"):
+            error = download_error(ExtractorError(text, expected=True))
+            self.run_channel(FakeProcessor({"https://c": error}), shared=shared)
+        self.assertFalse(shared.backoff.active())
+        self.assertEqual(shared.backoff.restricted_slots(), 0)
+        self.assertEqual(self.recorder.sleeps, [])
+
+    def test_an_extracted_video_clears_the_slot(self):
+        shared = self.shared(2)
+        self.run_channel(FakeProcessor({"https://c": unavailable()}), shared=shared)
+        self.assertEqual(shared.backoff.restricted_slots(), 1)
+        self.run_channel(FakeProcessor({"https://c": video("v")}), shared=shared)
+        self.assertEqual(shared.backoff.restricted_slots(), 0)
+        self.run_channel(
+            FakeProcessor({"https://c": unavailable()}), shared=shared, slot=1
+        )
+        self.assertFalse(shared.backoff.active())
+
+    def test_the_next_entry_waits_for_the_back_off(self):
+        shared = self.shared(1)
+        processor = FakeProcessor(
+            {
+                "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+                "https://v/a": unavailable("a"),
+                "https://v/b": video("b"),
+            }
+        )
+
+        def end_back_off() -> None:
+            self.clock.now += Backoff.DURATION
+
+        timer = threading.Timer(0.2, end_back_off)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        started = time.monotonic()
+        _, result = self.run_channel(processor, shared=shared)
+        self.assertGreaterEqual(time.monotonic() - started, 0.15)
+        self.assertTrue(result)
+        self.assertEqual(self.downloaded_ids(processor), ["b"])
+        required = [
+            m
+            for m in self.messages(SleepMessage)
+            if m.required and m.provider == Message.Provider.CHANNEL
+        ]
+        self.assertEqual(len(required), 1)
+        self.assertEqual(required[0].sleep_time, Backoff.DURATION)
+
+    def test_halt_or_drain_ends_the_back_off_wait(self):
+        for stop in ("halt", "drain"):
+            with self.subTest(stop=stop):
+                self.halt.clear()
+                shared = self.shared(1)
+                event = self.halt if stop == "halt" else shared.drain_event
+                processor = FakeProcessor(
+                    {
+                        "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+                        "https://v/a": unavailable("a"),
+                        "https://v/b": video("b"),
+                    }
+                )
+                timer = threading.Timer(0.1, event.set)
+                self.addCleanup(timer.cancel)
+                timer.start()
+                channel, result = self.run_channel(processor, shared=shared)
+                self.assertFalse(result)
+                self.assertTrue(channel.interrupted())
+                self.assertEqual(processor.downloaded, [])
+                self.assertIsNone(channel.get_last_error())
+                self.assertEqual(channel.row()[2], 0)
+
+
+class TestDrain(ChannelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.shared = Shared()
+
+    def test_the_running_download_completes(self):
+        processor = FakeProcessor({"https://c": video("vid")})
+        processor.on_download = lambda _: self.shared.drain_event.set()
+        channel, result = self.run_channel(processor, shared=self.shared)
+        self.assertTrue(result)
+        self.assertEqual(processor.downloaded, ["https://v/vid"])
+        self.assertGreater(cast(int, channel.row()[2]), 0)
+        # The pause before the next download is skipped
+        channel_sleeps = [
+            m
+            for m in self.messages(SleepMessage)
+            if m.provider == Message.Provider.CHANNEL
+        ]
+        self.assertEqual(channel_sleeps, [])
+
+    def test_stops_before_the_next_entry(self):
+        processor = FakeProcessor(
+            {
+                "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+                "https://v/a": video("a"),
+                "https://v/b": video("b"),
+            }
+        )
+        processor.on_download = lambda _: self.shared.drain_event.set()
+        channel = Channel("https://c", None, 100, 100, "previous")
+        channel.set_halt_event(self.halt)
+        channel.set_shared(self.shared)
+        self.assertFalse(channel.download(0, processor.processor, self.queue))
+        self.assertEqual(self.downloaded_ids(processor), ["a"])
+        self.assertTrue(channel.interrupted())
+        # Neither a download nor an error is recorded
+        self.assertEqual(channel.row()[2], 100)
+        self.assertEqual(channel.get_last_error(), "previous")
+
+    def test_a_drained_channel_does_not_start(self):
+        self.shared.drain_event.set()
+        processor = FakeProcessor({"https://c": video("vid")})
+        channel, result = self.run_channel(processor, shared=self.shared)
+        self.assertFalse(result)
+        self.assertEqual(processor.extracted, [])
+        self.assertIsNone(channel.get_last_error())
+        self.assertEqual(drain(self.queue), [])
+
+    def test_drain_ends_the_sleep_after_download(self):
+        Config.settings["Download"]["sleep_interval"] = 30
+        processor = FakeProcessor({"https://c": video("vid")})
+        timer = threading.Timer(0.2, self.shared.drain_event.set)
+        self.addCleanup(timer.cancel)
+        processor.on_download = lambda _: timer.start()
+        started = time.monotonic()
+        _, result = self.run_channel(processor, shared=self.shared)
+        self.assertTrue(result)
+        self.assertLess(time.monotonic() - started, 5)
+
+    def test_cleared_drain_continues_normally(self):
+        self.shared.drain_event.set()
+        self.shared.drain_event.clear()
+        processor = FakeProcessor({"https://c": video("vid")})
+        self.assertTrue(self.run_channel(processor, shared=self.shared)[1])
+
+
+class TestScheduledVideo(ChannelTestCase):
+    def scheduled(self, delay: float) -> FakeProcessor:
+        available_at = int(time.time() + delay)
+        formats = [
+            {"ext": "mp4", "width": 1920, "height": 1080, "available_at": available_at}
+        ]
+        return FakeProcessor({"https://c": video("vid", formats=formats)})
+
+    def test_the_wait_is_done_outside_yt_dlp(self):
+        recorder = SleepRecorder()
+        processor = self.scheduled(100)
+        with recorder.patch():
+            _, result = self.run_channel(processor)
+        self.assertTrue(result)
+        self.assertEqual(len(recorder.sleeps), 2)  # the wait, and the pause after
+        self.assertGreater(recorder.sleeps[0], 95)
+        self.assertLessEqual(recorder.sleeps[0], 100)
+        (pre_sleep,) = [
+            m
+            for m in self.messages(SleepMessage)
+            if m.provider == Message.Provider.DOWNLOAD
+        ]
+        self.assertTrue(pre_sleep.required)
+
+    def test_halt_or_drain_ends_the_wait_without_downloading(self):
+        for stop in ("halt", "drain"):
+            with self.subTest(stop=stop):
+                self.halt.clear()
+                shared = Shared()
+                event = self.halt if stop == "halt" else shared.drain_event
+                processor = self.scheduled(60)
+                timer = threading.Timer(0.1, event.set)
+                self.addCleanup(timer.cancel)
+                timer.start()
+                started = time.monotonic()
+                channel, result = self.run_channel(processor, shared=shared)
+                self.assertLess(time.monotonic() - started, 5)
+                self.assertFalse(result)
+                self.assertTrue(channel.interrupted())
+                self.assertEqual(processor.downloaded, [])
+                self.assertIsNone(channel.get_last_error())
+
+    def test_available_videos_are_not_waited_for(self):
+        recorder = SleepRecorder()
+        with recorder.patch():
+            self.run_channel(self.scheduled(-100))
+        self.assertEqual(len(recorder.sleeps), 1)  # only the pause after
+
+
+class FakeMetadataPP:
+    """Records the contexts set by the channel."""
+
+    def __init__(self) -> None:
+        self.contexts: list[MetadataContext | None] = []
+
+    def set_context(self, context: MetadataContext | None) -> None:
+        self.contexts.append(context)
+
+    def current(self) -> MetadataContext | None:
+        return self.contexts[-1] if self.contexts else None
+
+
+AVATAR = "https://yt3.example/avatar=s0"
+
+
+class TestMetadata(ChannelTestCase):
+    def setUp(self):
+        super().setUp()
+        Config.settings["Download"].update(metadata=True, thumbnail="channel")
+        self.pp = FakeMetadataPP()
+        self.seen: dict[str, MetadataContext | None] = {}
+
+    def download(self, infos: dict[str, object]) -> FakeProcessor:
+        processor = FakeProcessor(infos)
+        processor.on_download = lambda url: self.seen.__setitem__(
+            url.rsplit("/", 1)[1], self.pp.current()
+        )
+        self.run_channel(processor, metadata=cast(MetadataPostProcessor, self.pp))
+        return processor
+
+    def channel_info(self, urls: list[str]) -> dict[str, object]:
+        return playlist(
+            "p",
+            urls,
+            channel="Chan",
+            thumbnails=[{"id": "avatar_uncropped", "url": AVATAR}],
+        )
+
+    def test_episodes_count_from_the_oldest_entry(self):
+        urls = [f"https://v/{v}" for v in "abc"]
+        infos: dict[str, object] = {"https://c": self.channel_info(urls)}
+        infos.update({url: video(url[-1]) for url in urls})
+        self.download(infos)
+        self.assertEqual(
+            {k: v.episode_number for k, v in self.seen.items() if v},
+            {"a": 3, "b": 2, "c": 1},
+        )
+        context = cast(MetadataContext, self.seen["a"])
+        self.assertEqual((context.series, context.thumbnail_url), ("Chan", AVATAR))
+        # The context is cleared after each download
+        self.assertIsNone(self.pp.contexts[-1])
+
+    def test_nested_playlists_number_within_their_tab(self):
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(["https://c/videos", "https://c/shorts"]),
+            "https://c/videos": playlist("videos", ["https://v/va", "https://v/vb"]),
+            "https://c/shorts": playlist("shorts", ["https://v/sa"]),
+            "https://v/va": video("va"),
+            "https://v/vb": video("vb"),
+            "https://v/sa": video("sa"),
+        }
+        self.download(infos)
+        episodes = {
+            k: cast(MetadataContext, v).episode_number for k, v in self.seen.items()
+        }
+        self.assertEqual(episodes, {"va": 2, "vb": 1, "sa": 1})
+        self.assertTrue(
+            all(cast(MetadataContext, v).series == "Chan" for v in self.seen.values())
+        )
+
+    def test_a_single_video_has_no_episode(self):
+        self.download({"https://c": video("vid", channel="Chan")})
+        context = cast(MetadataContext, self.seen["vid"])
+        self.assertIsNone(context.episode_number)
+        self.assertEqual(context.series, "Chan")
+
+    def test_disabled_options(self):
+        Config.settings["Download"].update(metadata=False, thumbnail="video")
+        urls = ["https://v/a"]
+        self.download({"https://c": self.channel_info(urls), "https://v/a": video("a")})
+        self.assertEqual(self.seen["a"], MetadataContext())
+
+    def test_without_a_metadata_processor_nothing_is_set(self):
+        processor = FakeProcessor({"https://c": video("vid")})
+        self.assertTrue(self.run_channel(processor)[1])
 
 
 class TestChannelHelper(IsolatedTestCase):

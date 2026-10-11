@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .item import Item
+from .keyboard import Key
+from .monitor import SystemStatus
 
 
 @dataclass
@@ -19,6 +21,32 @@ class HaltMessage(Message): ...
 
 @dataclass
 class RedrawMessage(Message): ...
+
+
+# Keys read from the terminal
+@dataclass
+class InputMessage(Message):
+    keys: tuple[Key, ...]
+
+
+# A lasting state shown in the header, e.g. a pending quit or a back-off.
+# An empty status clears it, title is a short form for the title bar
+@dataclass
+class HeaderMessage(Message):
+    status: str
+    title: str = ""
+
+
+# A short lived notice shown in the header, e.g. the result of a command
+@dataclass
+class NoticeMessage(Message):
+    text: str
+    error: bool = False
+
+
+@dataclass
+class SystemStatusMessage(Message):
+    status: SystemStatus
 
 
 @dataclass

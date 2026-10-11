@@ -144,6 +144,37 @@ class TestValidate(IsolatedTestCase):
         Config.settings["Channels"]["slots"] = "two"
         self.assertIn("Channels.slots must be an integer", self.validate()[1])
 
+    def test_metadata_options(self):
+        for thumbnail in ("channel", "video", None):
+            with self.subTest(thumbnail=thumbnail):
+                Config.settings["Download"]["thumbnail"] = thumbnail
+                self.assertTrue(self.validate()[0])
+        Config.settings["Download"]["thumbnail"] = "avatar"
+        result, errors = self.validate()
+        self.assertFalse(result)
+        self.assertIn("Download.thumbnail", errors)
+        Config.settings["Download"]["thumbnail"] = "channel"
+        Config.settings["Download"]["metadata"] = "yes please"
+        result, errors = self.validate()
+        self.assertFalse(result)
+        self.assertIn("Download.metadata", errors)
+
+    def test_check_options_must_be_booleans(self):
+        for key in ("update_check", "network_check"):
+            with self.subTest(key=key):
+                Config.settings["General"][key] = 1
+                result, errors = self.validate()
+                self.assertFalse(result)
+                self.assertIn(f"General.{key}", errors)
+                Config.settings["General"][key] = False
+                self.assertTrue(self.validate()[0])
+
+    def test_new_options_have_safe_defaults(self):
+        self.assertIs(Config.settings["Download"]["metadata"], True)
+        self.assertEqual(Config.settings["Download"]["thumbnail"], "channel")
+        self.assertIs(Config.settings["General"]["update_check"], True)
+        self.assertIs(Config.settings["General"]["network_check"], True)
+
     def test_wrap_size_must_be_an_integer(self):
         Config.settings["Debug"]["wrap_size"] = "big"
         result, errors = self.validate()

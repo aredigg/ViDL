@@ -17,6 +17,8 @@ class Hook:
         MERGE = "Merger"
         MOVE = "MoveFiles"
         NORMALIZE = "FixupM3u8"
+        METADATA = "Metadata"
+        THUMBNAIL = "EmbedThumbnail"
 
         @staticmethod
         def process(state: str) -> str:
@@ -25,6 +27,8 @@ class Hook:
                 Hook.State.MERGE.value: "Merge",
                 Hook.State.MOVE.value: "Move",
                 Hook.State.NORMALIZE.value: "Normalize",
+                Hook.State.METADATA.value: "Metadata",
+                Hook.State.THUMBNAIL.value: "Thumbnail",
             }
             return processes.get(state) or state
 

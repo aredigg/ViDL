@@ -27,6 +27,9 @@ class ANSI:
         Enter: str = "\x1b[?1049h\x1b[?25l"
         Leave: str = "\x1b[?25h\x1b[?1049l"
 
+    CursorShow: str = "\x1b[?25h"
+    CursorHide: str = "\x1b[?25l"
+
     class Color:
         @staticmethod
         def __get_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -77,6 +80,15 @@ class ANSI:
     @staticmethod
     def len(string: str) -> int:
         return Unicode.len(ANSI.remove(string))
+
+    # Trims to the display length, marking a cut with an ellipsis
+    @staticmethod
+    def ellipsize(string: str, length: int) -> str:
+        if length <= 0:
+            return ""
+        if ANSI.len(string) <= length:
+            return string
+        return ANSI.trim(string, length - 1) + "…"
 
     @staticmethod
     def trim(string: str, length: int) -> str:

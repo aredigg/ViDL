@@ -32,6 +32,22 @@ class TestANSI(unittest.TestCase):
         self.assertEqual(ANSI.remove(ANSI.trim("a日b", 2)), "a")
         self.assertEqual(ANSI.remove(ANSI.trim("a日b", 3)), "a日")
 
+    def test_ellipsize(self):
+        self.assertEqual(ANSI.ellipsize("abc", 3), "abc")
+        self.assertEqual(ANSI.remove(ANSI.ellipsize("abcdef", 4)), "abc…")
+        self.assertEqual(ANSI.len(ANSI.ellipsize("abcdef", 4)), 4)
+        self.assertEqual(ANSI.remove(ANSI.ellipsize("a日本b", 3)), "a…")
+        self.assertEqual(ANSI.ellipsize("abc", 0), "")
+        self.assertEqual(ANSI.ellipsize("abc", -1), "")
+        self.assertEqual(ANSI.remove(ANSI.ellipsize("abc", 1)), "…")
+        colored = f"{ANSI.Color.Cerise}abcdef{ANSI.Color.DefaultFg}"
+        self.assertEqual(ANSI.len(ANSI.ellipsize(colored, 4)), 4)
+
+    def test_cursor_visibility(self):
+        self.assertEqual(ANSI.CursorShow, "\x1b[?25h")
+        self.assertEqual(ANSI.CursorHide, "\x1b[?25l")
+        self.assertTrue(ANSI.Alternate.Leave.startswith(ANSI.CursorShow))
+
     def test_trim_to_zero_or_negative_length(self):
         self.assertEqual(ANSI.remove(ANSI.trim("abc", 0)), "")
         self.assertEqual(ANSI.remove(ANSI.trim("abc", -5)), "")

@@ -31,6 +31,14 @@ class Util:
                 mn = 0
         return f"{hr:02}:{mn:02}′"
 
+    # e.g. "03:04:05", or "2d 03:04:05" from one day
+    @staticmethod
+    def format_uptime(seconds: float) -> str:
+        seconds = max(0, int(seconds))
+        days, seconds = divmod(seconds, Util.SECONDS_PER_DAY)
+        clock = Util.format_seconds(seconds, two_parts=False)
+        return f"{days}d {clock}" if days else clock
+
     @staticmethod
     def get_date(epoch: int | None = None):
         if epoch == 0:

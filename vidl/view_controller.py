@@ -4,6 +4,8 @@ from threading import Event, Thread
 from time import monotonic_ns, time
 
 from .ansi import ANSI
+from .command import Command
+from .controls import Controls
 from .hook import Hook
 from .message import (
     CountMessage,
@@ -11,14 +13,18 @@ from .message import (
     EntityMessage,
     ErrorMessage,
     HaltMessage,
+    HeaderMessage,
     InfoMessage,
     InitMessage,
+    InputMessage,
     MediaMessage,
     Message,
+    NoticeMessage,
     PathMessage,
     ProgressMessage,
     RedrawMessage,
     SleepMessage,
+    SystemStatusMessage,
     WarningMessage,
 )
 from .terminal import Terminal
@@ -40,8 +46,11 @@ class ViewController:
         # The header exists before the thread starts, so halt() is always safe
         self.__views: dict[int, View] = {View.HEADER: View(header=True)}
         self.__redraw_required = False
-        self.__input_queue: Queue[str] = Queue()
         self.__queue: Queue[Message] = Queue()
+        # Commands from the keyboard, handled by the coordinator
+        self.__command_queue: Queue[Command] = Queue()
+        self.__controls = Controls(self.__command_queue.put)
+        self.__title = ""
         self.__halt_event = Event()
         self.__thread = Thread(
             target=self.__run, name=f"ViewController-{ViewController.index}"
@@ -53,7 +62,7 @@ class ViewController:
     # tick for the animation, and message driven status updates in between,
     # limited to MIN_RENDER_INTERVAL_NS
     def __run(self) -> None:
-        with Terminal(self.__input_queue) as terminal:
+        with Terminal(self.__queue) as terminal:
             self.__redraw(terminal)
             full_update = True
             pending = False
@@ -87,6 +96,8 @@ class ViewController:
                 else:
                     for view in self.__views.values():
                         view.update_status(terminal, tacho)
+                # Drawing moves the cursor, so it is put back last
+                terminal.set_cursor(self.__views[View.HEADER].cursor_position())
                 full_update = pending = False
                 last_render = now
                 terminal.flush()
@@ -110,7 +121,7 @@ class ViewController:
                 return True
 
     def __update(self, terminal: Terminal, tacho: int) -> None:
-        title_bar: list[str] = []
+        title_bar: list[str] = [self.__title] if self.__title else []
         for view in self.__views.values():
             view.update(terminal, tacho)
             if view.get_top_index() > 0:
@@ -164,6 +175,25 @@ class ViewController:
     @__dispatch_message.register
     def _(self, _message: RedrawMessage):
         self.__redraw_required = True
+
+    @__dispatch_message.register
+    def _(self, message: InputMessage):
+        for key in message.keys:
+            self.__controls.handle(key)
+        self.__views[View.HEADER].set_prompt(self.__controls.prompt())
+
+    @__dispatch_message.register
+    def _(self, message: HeaderMessage):
+        self.__views[View.HEADER].set_header_status(message.status)
+        self.__title = message.title
+
+    @__dispatch_message.register
+    def _(self, message: NoticeMessage):
+        self.__views[View.HEADER].set_notice(message.text, message.error)
+
+    @__dispatch_message.register
+    def _(self, message: SystemStatusMessage):
+        self.__views[View.HEADER].set_system_status(message.status)
 
     @__dispatch_message.register
     def _(self, message: SleepMessage):
@@ -299,20 +329,13 @@ class ViewController:
                 )
             )
 
+    # The message is shown as is: it is already short, and splitting it on
+    # ":" breaks e.g. "HTTP Error 429: Too Many Requests" or URLs
     @__dispatch_message.register
     def _(self, message: ErrorMessage):
         if message.index in self.__views:
             view = self.__views[message.index]
-            parts = message.message.split(":", maxsplit=1)
-            if len(parts) == 2:
-                view.set_status(
-                    status=View.Status(
-                        View.Status.State.ERROR,
-                        provider=parts[0].strip(),
-                        message=parts[1].strip(),
-                    )
-                )
-            elif message.provider == Message.Provider.CHANNEL:
+            if message.provider == Message.Provider.CHANNEL:
                 view.set_status(
                     status=View.Status(
                         View.Status.State.ERROR,
@@ -332,8 +355,8 @@ class ViewController:
     def get_queue(self) -> Queue[Message]:
         return self.__queue
 
-    def get_input_queue(self) -> Queue[str]:
-        return self.__input_queue
+    def get_command_queue(self) -> Queue[Command]:
+        return self.__command_queue
 
     def halt(self):
         self.__views[View.HEADER].set_status(

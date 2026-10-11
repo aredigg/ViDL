@@ -1,4 +1,5 @@
 # pyright: standard
+import threading
 import unittest
 from queue import Queue
 from typing import Any, ClassVar
@@ -12,6 +13,12 @@ from vidl.config import Config
 from vidl.hook import DownloadCancelled
 from vidl.logger import Logger
 from vidl.message import ErrorMessage, InitMessage, Message
+from vidl.metadata import (
+    MetadataPostProcessor,
+    NewFileEmbedThumbnailPP,
+    NewFileMetadataPP,
+)
+from vidl.shared import Shared
 from vidl.slot import Slot
 
 
@@ -23,8 +30,13 @@ class FakeYoutubeDL:
         if FakeYoutubeDL.fail:
             raise RuntimeError("setup failed")
         self.settings = settings
+        self.params = settings
         self.closed = False
+        self.post_processors: list[tuple[object, str]] = []
         FakeYoutubeDL.instances.append(self)
+
+    def add_post_processor(self, pp: object, when: str = "post_process") -> None:
+        self.post_processors.append((pp, when))
 
     def close(self) -> None:
         self.closed = True
@@ -42,6 +54,7 @@ class FakeChannel(Channel):
         processor: YoutubeDL,
         queue: Queue[Message],
         playlist_index: int = 1,
+        playlist_count: int = 0,
     ) -> bool:
         self.calls.append((slot, processor))
         if isinstance(self.behaviour, BaseException):
@@ -60,8 +73,10 @@ class TestSlot(IsolatedTestCase):
         Config.settings["General"]["cookie_browser"] = None
         Config.settings["Paths"].update(output="/out", temporary="/tmp/vidl")
         Config.settings["Channels"]["archived"] = "archived"
+        Config.settings["Download"].update(metadata=True, thumbnail="channel")
         self.queue: Queue[Message] = Queue()
-        self.slot = Slot(2, self.queue)
+        self.shared = Shared()
+        self.slot = Slot(2, self.queue, self.shared)
         self.addCleanup(self.stop)
         self.assertTrue(wait_until(self.slot.ready))
 
@@ -124,7 +139,8 @@ class TestSlot(IsolatedTestCase):
         (message,) = [m for m in drain(self.queue) if isinstance(m, ErrorMessage)]
         self.assertEqual(message.provider, Message.Provider.SLOT)
         self.assertEqual(message.target, "a")
-        self.assertEqual(message.message, "RuntimeError: boom: details")
+        # Short in the panel, the details are kept in the channels file
+        self.assertEqual(message.message, "Internal error (RuntimeError)")
         self.assertEqual(channel.get_last_error(), "RuntimeError: boom: details")
         self.assertFalse(channel.active())
         self.assertTrue(FakeYoutubeDL.instances[0].closed)
@@ -154,6 +170,76 @@ class TestSlot(IsolatedTestCase):
         self.process(channel)
         self.slot.halt()
         self.assertTrue(private(channel, Channel, "halt_event").is_set())
+
+    def test_shared_state_is_given_to_the_channel(self):
+        channel = FakeChannel("a")
+        self.process(channel)
+        self.assertIs(private(channel, Channel, "shared"), self.shared)
+
+    def test_busy_while_processing(self):
+        self.assertFalse(self.slot.busy())
+        started, release = mock.Mock(), threading.Event()
+
+        class Blocking(FakeChannel):
+            def download(self, *args: Any, **kwargs: Any) -> bool:
+                started()
+                release.wait(5)
+                return True
+
+        channel = Blocking("a")
+        channel.set_active()
+        self.slot.process(channel)
+        self.assertTrue(wait_until(lambda: started.called))
+        self.assertTrue(self.slot.busy())
+        release.set()
+        self.assertTrue(wait_until(lambda: not self.slot.busy()))
+        self.stop()
+        self.assertFalse(self.slot.busy())  # a stopped slot is never busy
+
+    def test_metadata_post_processors(self):
+        channel = FakeChannel("a")
+        self.process(channel)
+        processor = FakeYoutubeDL.instances[0]
+        kinds = [(type(pp), when) for pp, when in processor.post_processors]
+        self.assertEqual(
+            kinds,
+            [
+                (MetadataPostProcessor, "video"),
+                (NewFileMetadataPP, "post_process"),
+                (NewFileEmbedThumbnailPP, "post_process"),
+            ],
+        )
+        self.assertTrue(processor.settings["writethumbnail"])
+        metadata_pp = processor.post_processors[0][0]
+        self.assertIs(private(channel, Channel, "metadata_pp"), metadata_pp)
+
+    def test_post_processors_follow_the_options(self):
+        cases = (
+            (False, "channel", [MetadataPostProcessor, NewFileEmbedThumbnailPP], True),
+            (
+                True,
+                "video",
+                [MetadataPostProcessor, NewFileMetadataPP, NewFileEmbedThumbnailPP],
+                True,
+            ),
+            (False, "video", [NewFileEmbedThumbnailPP], True),
+            (True, None, [MetadataPostProcessor, NewFileMetadataPP], False),
+            (False, None, [], False),
+        )
+        for metadata, thumbnail, expected, writethumbnail in cases:
+            with self.subTest(metadata=metadata, thumbnail=thumbnail):
+                FakeYoutubeDL.instances = []
+                Config.settings["Download"].update(
+                    metadata=metadata, thumbnail=thumbnail
+                )
+                self.process(FakeChannel("a"))
+                processor = FakeYoutubeDL.instances[0]
+                self.assertEqual(
+                    [type(pp) for pp, _ in processor.post_processors], expected
+                )
+                self.assertEqual(
+                    processor.settings.get("writethumbnail", False), writethumbnail
+                )
 
 
 if __name__ == "__main__":

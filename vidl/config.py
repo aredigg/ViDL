@@ -7,6 +7,7 @@ from typing import ClassVar
 
 class Config:
     SLEEP_INTERVAL: int = 3
+    THUMBNAIL_OPTIONS: tuple[str | None, ...] = ("channel", "video", None)
     path: str = os.path.abspath(os.path.curdir)
     ini: str = "config.ini"
 
@@ -24,6 +25,8 @@ class Config:
         "General": {
             "cookie_browser": "safari",
             "nerd_fonts": True,
+            "update_check": True,
+            "network_check": True,
         },
         "Download": {
             "allow_vertical": False,
@@ -33,6 +36,8 @@ class Config:
             "resolution_defer": 0,
             "sleep_interval": 120,
             "post_sleep_cutoff": 60,
+            "metadata": True,
+            "thumbnail": "channel",
         },
         "Debug": {
             "file_name": "debug",
@@ -164,6 +169,19 @@ class Config:
             print(
                 "ERROR: Channels.slots must not be negative "
                 + "(0 and 1 both use a single slot)",
+                file=sys.stderr,
+            )
+            result = False
+        for key in ("update_check", "network_check"):
+            if not isinstance(Config.settings["General"].get(key), bool):
+                print(f"ERROR: General.{key} must be True or False", file=sys.stderr)
+                result = False
+        if not isinstance(download.get("metadata"), bool):
+            print("ERROR: Download.metadata must be True or False", file=sys.stderr)
+            result = False
+        if download.get("thumbnail") not in Config.THUMBNAIL_OPTIONS:
+            print(
+                'ERROR: Download.thumbnail must be "channel", "video" or None',
                 file=sys.stderr,
             )
             result = False

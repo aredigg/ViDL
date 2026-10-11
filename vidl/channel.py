@@ -4,13 +4,14 @@ import os
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from queue import Queue
 from threading import Event, RLock
-from time import time
+from time import monotonic, time
 from typing import ClassVar, cast
 
-from yt_dlp.utils import DownloadError, ExtractorError
+from yt_dlp.utils import DownloadError
 from yt_dlp.YoutubeDL import YoutubeDL
 
 from .config import Config
@@ -28,14 +29,24 @@ from .message import (
     PathMessage,
     SleepMessage,
 )
+from .metadata import (
+    MetadataContext,
+    MetadataPostProcessor,
+    channel_thumbnail,
+    episode_number,
+)
+from .shared import Shared
 from .util import Util
 
 
 class Channel:
-    BACKOFF_TRIGGER: str = "Video unavailable"
+    # Pause after a restriction error that did not start a global back-off
     BACKOFF_GRACE: int = 5
-    BACKOFF_SLEEP: int = 6 * Util.SECONDS_PER_HOUR
     ALREADY_ARCHIVED: str = "Already recorded in archive"
+    # Longest time between checks of the halt and drain events while sleeping
+    SLEEP_STEP: float = 0.5
+    # Longest unexpected failure text kept in the channels file
+    FAILURE_MAX: int = 200
 
     __lock = RLock()
     __write_archive_lock = RLock()
@@ -67,6 +78,13 @@ class Channel:
         self.__playlist: bool = False
         # Replaced by the slot's event; the default is never set, it only avoids None checks
         self.__halt_event: Event = Event()
+        # The back-off and drain state of all slots, given by the slot
+        self.__shared: Shared | None = None
+        # Set when a halt or drain stopped the download before it completed
+        self.__interrupted: bool = False
+        self.__metadata_pp: MetadataPostProcessor | None = None
+        # Series and cover of the top level channel, given to sub channels
+        self.__metadata: MetadataContext = MetadataContext()
 
     def row(self):
         with Channel.__lock:
@@ -104,6 +122,23 @@ class Channel:
     def set_halt_event(self, halt_event: Event):
         self.__halt_event = halt_event
 
+    def set_shared(self, shared: Shared | None):
+        self.__shared = shared
+
+    def set_metadata_processor(self, processor: MetadataPostProcessor | None):
+        self.__metadata_pp = processor
+
+    def assign_metadata(self, context: MetadataContext):
+        self.__metadata = context
+
+    def get_metadata(self) -> MetadataContext:
+        return self.__metadata
+
+    # True when the last download was stopped by a halt or drain, it is then
+    # neither a success nor an error
+    def interrupted(self) -> bool:
+        return self.__interrupted
+
     def set_active(self):
         self.__active = True
 
@@ -113,7 +148,15 @@ class Channel:
     def active(self):
         return self.__active
 
+    # Errors logged by yt-dlp, stored in the short form
     def report_error(self, message: str):
+        self.__set_error(Error(message, self.__known_ids()).display)
+
+    # An unexpected failure, stored as is (bounded) since there is no short form
+    def report_failure(self, message: str):
+        message = " ".join(message.split())
+        if len(message) > Channel.FAILURE_MAX:
+            message = message[: Channel.FAILURE_MAX - 1] + "…"
         self.__set_error(message)
 
     # ----- Inside slot thread
@@ -124,34 +167,42 @@ class Channel:
         processor: YoutubeDL,
         queue: Queue[Message],
         playlist_index: int = 1,
+        playlist_count: int = 0,
     ):
         if self.__slot_index is not None:
             return False
 
         self.__slot_index = slot
+        self.__interrupted = False
         if self.__sub_level == 0:
             self.__reset_epoch_cutoff()
         try:
             self.__set_attempt_date()
-            result = self.__extract(processor, queue, playlist_index)
+            result = self.__extract(processor, queue, playlist_index, playlist_count)
             if result:
                 self.__set_download_date()
                 self.__set_error(None)
-            else:
-                if self.__get_error() is None:
-                    self.__set_error("Unknown error")
+            elif not self.__interrupted and self.__get_error() is None:
+                self.__set_error("Unknown error")
             return result
         finally:
             self.__slot_index = None
             self.__active = False
 
     def __extract(
-        self, processor: YoutubeDL, queue: Queue[Message], playlist_index: int
+        self,
+        processor: YoutubeDL,
+        queue: Queue[Message],
+        playlist_index: int,
+        playlist_count: int,
     ) -> bool:
         if self.__halt_event.is_set():
-            self.__report_error(queue, "Got halted")
+            self.__report_status(queue, "Got halted")
             return False
         if self.__slot_index is None:
+            return False
+        if self.__draining() or self.__await_backoff(queue):
+            self.__interrupted = True
             return False
         if self.__url is None or self.__url == "None":
             self.__url = self.__name
@@ -179,6 +230,9 @@ class Channel:
                 or f"{Item.get_str(info, 'extractor')} ({Item.get_str(info, 'id')})"
             )
             self.__id = Item.get_str(info, "id")
+            top_name = Item.get_str(info, "channel") or self.__name
+            if self.__sub_level == 0:
+                self.__metadata = Channel.__top_metadata(info, top_name)
 
             queue.put(
                 EntityMessage(
@@ -186,9 +240,7 @@ class Channel:
                     provider=Message.Provider.CHANNEL,
                     entity=Item.get_entity(
                         info=info,
-                        name=(Item.get_str(info, "channel") or self.__name)
-                        if self.__sub_level == 0
-                        else "",
+                        name=top_name if self.__sub_level == 0 else "",
                         index=playlist_index,
                     ),
                 )
@@ -217,8 +269,11 @@ class Channel:
                     )
                 )
 
-                sub_channels: list[Channel] = []
-                if entries := Item.get_lst(info, "entries"):
+                # Each sub channel keeps its position in the entries, which
+                # is what the panel shows, and gives the episode number
+                sub_channels: list[tuple[int, Channel]] = []
+                entries = Item.get_lst(info, "entries")
+                if entries:
                     queue.put(
                         CountMessage(
                             index=self.__slot_index,
@@ -226,56 +281,73 @@ class Channel:
                             value=len(entries),
                         )
                     )
-                    for entry in cast(list[dict[str, object]], entries):
+                    for position, entry in enumerate(
+                        cast(list[dict[str, object]], entries), start=1
+                    ):
                         if url := Item.get_str(entry, "webpage_url") or Item.get_str(
                             entry, "url"
                         ):
                             sub_channels.append(
-                                Channel(
-                                    url,
-                                    None,
-                                    None,
-                                    None,
-                                    None,
-                                    sub_level=self.__sub_level + 1,
+                                (
+                                    position,
+                                    Channel(
+                                        url,
+                                        None,
+                                        None,
+                                        None,
+                                        None,
+                                        sub_level=self.__sub_level + 1,
+                                    ),
                                 )
                             )
-                        if self.__halt_event.is_set():
-                            sub_channels.clear()
-                            break
+                        if self.__stop_requested():
+                            self.__interrupted = True
+                            return False
 
-                if sub_channels:
-                    for enum_playlist_index, channel in enumerate(
-                        sub_channels, start=1
-                    ):
-                        if not self.__epoch_cutoff_passed:
-                            channel.set_active()
-                            channel.assign_epoch_cutoff(self.get_epoch_cutoff())
-                            channel.set_halt_event(self.__halt_event)
-                            _ = channel.download(
-                                self.__slot_index, processor, queue, enum_playlist_index
-                            )
-                            # A nested playlist's cutoff does not apply to its siblings
-                            if not channel.is_playlist():
-                                self.assign_epoch_cutoff(channel.get_epoch_cutoff())
+                for position, channel in sub_channels:
+                    if self.__epoch_cutoff_passed:
+                        continue
+                    if self.__stop_requested():
+                        self.__interrupted = True
+                        break
+                    channel.set_active()
+                    channel.assign_epoch_cutoff(self.get_epoch_cutoff())
+                    channel.set_halt_event(self.__halt_event)
+                    channel.set_shared(self.__shared)
+                    channel.set_metadata_processor(self.__metadata_pp)
+                    channel.assign_metadata(self.__metadata)
+                    _ = channel.download(
+                        self.__slot_index, processor, queue, position, len(entries)
+                    )
+                    # A nested playlist's cutoff does not apply to its siblings
+                    if not channel.is_playlist():
+                        self.assign_epoch_cutoff(channel.get_epoch_cutoff())
+                    if channel.interrupted():
+                        self.__interrupted = True
+                        break
+                if self.__interrupted:
+                    # Not completed, so it is neither a download nor an error
+                    return False
             else:
-                Debug.print(self.__slot_index, str(info))
+                self.__debug(str(info))
                 format = Item.enumerate_best_format(info)
-                Debug.print(self.__slot_index, str(format))
+                self.__debug(str(format))
+                # The video could be extracted, so this slot is not restricted
+                self.__report_success()
                 if Item.no_vertical(format):
                     self.__record_archive(processor, info)
-                    self.__report_error(queue, "Vertical video")
+                    self.__report_status(queue, "Vertical video")
                     return False
                 if not Item.high_resolution(format):
                     self.__record_archive(processor, info)
-                    self.__report_error(queue, "Low resolution")
+                    self.__report_status(queue, "Low resolution")
                     return False
                 if not Item.outside_deferred(info, format):
-                    self.__report_error(queue, "Defer low resolution")
+                    self.__report_status(queue, "Defer low resolution")
                     return False
                 if not self.__within_cutoff(info):
                     self.__epoch_cutoff_passed = True
-                    self.__report_error(queue, "Outside cutoff")
+                    self.__report_status(queue, "Outside cutoff")
                     return False
                 else:
                     if self.__epoch_cutoff != 0:
@@ -296,18 +368,34 @@ class Channel:
                         path=path(info, "temp"),
                     )
                 )
-                sleep_time = (Item.get_int(format, "available_at") or time()) - time()
+                available_at = Item.get_int(format, "available_at")
+                sleep_time = (available_at or time()) - time()
                 sleep_time = max(Config.SLEEP_INTERVAL, sleep_time + 1)
+                required = sleep_time > Config.SLEEP_INTERVAL
                 queue.put(
                     SleepMessage(
                         index=self.__slot_index,
                         provider=Message.Provider.DOWNLOAD,
                         sleep_time=sleep_time,
-                        required=sleep_time > Config.SLEEP_INTERVAL,
+                        required=required,
                     )
                 )
+                # yt-dlp waits for available_at in time.sleep, which neither
+                # a halt nor a drain can end, so the wait is done here
+                if available_at and required and self.__sleep(available_at - time()):
+                    self.__interrupted = True
+                    return False
                 process_time = int(time())
-                ret = self.__download(processor, queue, info)
+                self.__set_metadata_context(playlist_index, playlist_count)
+                try:
+                    ret = self.__download(processor, queue, info)
+                finally:
+                    self.__set_metadata_context(None, 0)
+                if ret:
+                    self.__report_success()
+                if self.__stop_requested():
+                    # The download is complete, the pause before the next is not needed
+                    return ret
                 min_sleep = cast(int, Config.settings["Download"]["sleep_interval"])
                 cutoff = (
                     cast(int, (Config.settings["Download"]["post_sleep_cutoff"]))
@@ -321,14 +409,81 @@ class Channel:
                         sleep_time=sleep_time,
                     )
                 )
-                sleep_until = int(time()) + sleep_time
-                while int(time()) < sleep_until:
-                    if self.__halt_event.wait(1):
-                        return ret
+                _ = self.__sleep(sleep_time)
                 return ret
         else:
             return False
         return True
+
+    @staticmethod
+    def __top_metadata(info: dict[str, object], top_name: str) -> MetadataContext:
+        download = Config.settings["Download"]
+        thumbnail = None
+        if download.get("thumbnail") == "channel":
+            thumbnail = channel_thumbnail(info)
+        return MetadataContext(
+            series=(top_name or None) if download.get("metadata") else None,
+            thumbnail_url=thumbnail,
+        )
+
+    def __set_metadata_context(self, playlist_index: int | None, playlist_count: int):
+        if self.__metadata_pp is None:
+            return
+        if playlist_index is None:
+            self.__metadata_pp.set_context(None)
+            return
+        episode = None
+        # A single video at the top level is not part of a playlist
+        if self.__sub_level > 0 and Config.settings["Download"].get("metadata"):
+            episode = episode_number(playlist_count, playlist_index)
+        self.__metadata_pp.set_context(replace(self.__metadata, episode_number=episode))
+
+    def __draining(self) -> bool:
+        return self.__shared is not None and self.__shared.drain_event.is_set()
+
+    def __stop_requested(self) -> bool:
+        return self.__halt_event.is_set() or self.__draining()
+
+    # Sleeps, returns True when a halt or drain ended the sleep early
+    def __sleep(self, seconds: float) -> bool:
+        end = monotonic() + seconds
+        while (remaining := end - monotonic()) > 0:
+            if self.__halt_event.wait(min(Channel.SLEEP_STEP, remaining)):
+                return True
+            if self.__draining():
+                return True
+        return self.__stop_requested()
+
+    # Waits while a global back-off is active, returns True when a halt or
+    # drain ended the wait
+    def __await_backoff(self, queue: Queue[Message]) -> bool:
+        if self.__shared is None:
+            return False
+        backoff = self.__shared.backoff
+        if not backoff.active():
+            return False
+        if self.__slot_index is not None:
+            queue.put(
+                SleepMessage(
+                    index=self.__slot_index,
+                    provider=Message.Provider.CHANNEL,
+                    sleep_time=backoff.remaining(),
+                    required=True,
+                )
+            )
+        return backoff.wait(self.__halt_event, self.__shared.drain_event)
+
+    def __report_success(self):
+        if self.__shared is not None:
+            if self.__slot_index is not None:
+                self.__shared.backoff.report_success(self.__slot_index)
+            self.__shared.network_success()
+
+    def __known_ids(self) -> tuple[str, ...]:
+        return (self.__id,) if self.__id else ()
+
+    def __debug(self, message: str):
+        Debug.print(-1 if self.__slot_index is None else self.__slot_index, message)
 
     def __download(
         self, processor: YoutubeDL, queue: Queue[Message], info: Mapping[str, object]
@@ -348,54 +503,53 @@ class Channel:
             return False
 
     def __handle_error_exception(self, queue: Queue[Message], e: DownloadError):
-        real = e.exc_info[1]
-        if isinstance(real, ExtractorError):
-            error = Error(str(real.cause or real))
-            self.__report_error(queue, error.message, real.video_id)
-        else:
-            error = Error(str(e))
-            self.__report_error(queue, error.message, error.identity)
-        if self.__slot_index is not None:
-            Debug.print(self.__slot_index, str(e))
-        else:
-            Debug.print(-1, str(e))
+        error = Error.from_exception(e, self.__known_ids())
+        self.__debug(f"{error.category.name} ({error.kind.value}): {error.raw}")
+        self.__report(queue, error)
 
-    def __report_error(
-        self, queue: Queue[Message], message: str | None, target: str | None = None
-    ):
+    # A yt-dlp error, shown and stored in its short form
+    def __report(self, queue: Queue[Message], error: Error):
         if self.__slot_index is not None:
             queue.put(
                 ErrorMessage(
                     index=self.__slot_index,
                     provider=Message.Provider.CHANNEL,
-                    target=(self.__id or self.__name or "")
-                    if target is None
-                    else target,
-                    message=message or "",
+                    target=error.identity or self.__id or self.__name or "",
+                    message=error.summary,
+                )
+            )
+        self.__set_error(error.display)
+        if self.__shared is not None and error.category is Error.Category.NETWORK:
+            self.__shared.network_error()
+        if error.restriction:
+            self.__restricted(error)
+
+    # A restriction may be a temporary ban, or just a deleted video. Only when
+    # enough slots are restricted all of them back off, which is waited for
+    # before the next extraction. Otherwise this slot pauses briefly.
+    def __restricted(self, error: Error):
+        if (
+            self.__shared is not None
+            and self.__slot_index is not None
+            and self.__shared.backoff.report_restriction(
+                self.__slot_index, error.display
+            )
+        ):
+            return
+        _ = self.__sleep(Channel.BACKOFF_GRACE)
+
+    # A status decided by ViDL itself, e.g. a skipped video
+    def __report_status(self, queue: Queue[Message], message: str):
+        if self.__slot_index is not None:
+            queue.put(
+                ErrorMessage(
+                    index=self.__slot_index,
+                    provider=Message.Provider.CHANNEL,
+                    target=self.__id or self.__name or "",
+                    message=message,
                 )
             )
         self.__set_error(message)
-        # This is an indication of a temporary ban, so lets sleep it off
-        if (error := self.__get_error()) and error.endswith(Channel.BACKOFF_TRIGGER):
-            self.__backoff_sleep(queue)
-
-    def __backoff_sleep(self, queue: Queue[Message]):
-        if self.__halt_event.wait(Channel.BACKOFF_GRACE):
-            return
-        sleep_time = Channel.BACKOFF_SLEEP
-        if self.__slot_index is not None:
-            queue.put(
-                SleepMessage(
-                    index=self.__slot_index,
-                    provider=Message.Provider.CHANNEL,
-                    sleep_time=sleep_time,
-                    required=True,
-                )
-            )
-        sleep_until = int(time()) + sleep_time
-        while int(time()) < sleep_until:
-            if self.__halt_event.wait(1):
-                return
 
     def __record_archive(self, processor: YoutubeDL, info: dict[str, object]):
         if processor.params.get("download_archive"):

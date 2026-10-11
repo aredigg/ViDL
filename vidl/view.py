@@ -18,7 +18,7 @@ from .util import Util
 
 class View:
     HEADER: int = -1
-    HEADER_HEIGHT: int = 5
+    HEADER_HEIGHT: int = 6
     ROW_MIN_SIZE: int = 12
     COL_MIN_SIZE: int = 120
     RING_SIZE: int = 20
@@ -169,9 +169,7 @@ class View:
         terminal.print(line, self.__size.origin_row + 1, View.HEADER_COL)
         status = self.__status.message or self.__header_status
         left = (
-            f" --- {ANSI.Color.FashionBlue}{status}{ANSI.Color.DefaultFg}"
-            if status
-            else ""
+            f"{ANSI.Color.FashionBlue}{status}{ANSI.Color.DefaultFg}" if status else ""
         )
         line = View.__compose(left, self.__system_segments(), width)
         terminal.print(line, self.__size.origin_row + 2, View.HEADER_COL)

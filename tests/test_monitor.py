@@ -14,7 +14,7 @@ from email.message import Message
 from typing import NamedTuple, cast, final
 from unittest import mock
 
-from tests.helpers import IsolatedTestCase, wait_until
+from tests.helpers import IsolatedTestCase, private, wait_until
 from vidl.monitor import (
     DiskStatus,
     Monitor,
@@ -430,6 +430,19 @@ class TestPassiveErrors(MonitorTestCase):
         for _ in range(Monitor.MAX_NETWORK_ERRORS + 10):
             monitor.report_network_error()
         self.assertEqual(monitor.snapshot().network_errors, Monitor.MAX_NETWORK_ERRORS)
+
+    def test_errors_expire_after_the_clock_is_set_back(self):
+        monitor = self.monitor()
+        monitor.report_network_error()
+        self.clock.now -= 3600
+        self.assertEqual(monitor.snapshot().network_errors, 1)
+        self.clock.now += Monitor.NETWORK_ERROR_WINDOW
+        self.assertEqual(monitor.snapshot().network_errors, 0)
+
+    def test_the_wall_clock_is_the_default(self):
+        # The monotonic clock stops while the computer sleeps
+        monitor = Monitor(publish=lambda status: None, paths=[])
+        self.assertIs(private(monitor, Monitor, "clock"), time.time)
 
 
 class TestCheckVersion(MonitorTestCase):

@@ -153,7 +153,8 @@ class View:
         self.__item_progress: Item.Progress | None = None
         self.__item_media: Item.Media | None = None
         # Header only
-        self.__started = monotonic()
+        # The wall clock, so the uptime includes time the computer slept
+        self.__started = time()
         self.__header_status = ""
         self.__notice: tuple[str, bool, float] | None = None  # text, error, until
         self.__system: SystemStatus | None = None
@@ -164,7 +165,7 @@ class View:
         width = self.__header_width()
         if width <= 0:
             return
-        uptime = Util.format_uptime(monotonic() - self.__started)
+        uptime = Util.format_uptime(time() - self.__started)
         line = View.__compose("𓃥  ViDL", [f"{Util.get_time()}  up {uptime}"], width)
         terminal.print(line, self.__size.origin_row + 1, View.HEADER_COL)
         status = self.__status.message or self.__header_status

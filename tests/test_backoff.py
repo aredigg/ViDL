@@ -247,6 +247,42 @@ class TestActive(BackoffTestCase):
         self.assertEqual(backoff.remaining(), Backoff.DURATION)
 
 
+class TestWallClock(BackoffTestCase):
+    def test_the_wall_clock_is_the_default(self):
+        # The monotonic clock stops while the computer sleeps (macOS), and the
+        # back-off would last longer by that time
+        self.assertIs(Backoff()._Backoff__clock, time.time)  # pyright: ignore[reportAttributeAccessIssue]
+
+    def test_set_back_clock_never_extends_a_back_off(self):
+        backoff = self.backoff(1)
+        _ = self.report(backoff, 0)
+        self.clock.advance(Backoff.DURATION - 60)
+        self.assertEqual(backoff.remaining(), 60)
+        self.clock.advance(-3600)
+        self.assertEqual(backoff.remaining(), 60)
+        self.clock.advance(60)
+        self.assertFalse(backoff.active())
+
+    def test_time_asleep_counts(self):
+        # The wall clock jumps ahead after the computer slept
+        backoff = self.backoff(1)
+        _ = self.report(backoff, 0)
+        self.clock.advance(Backoff.DURATION + 3600)
+        self.assertFalse(backoff.active())
+        self.assertEqual(backoff.remaining(), 0.0)
+
+    def test_set_back_clock_never_extends_a_report(self):
+        backoff = self.backoff(2)
+        _ = self.report(backoff, 0)
+        self.clock.advance(-3600)
+        self.assertEqual(backoff.restricted_slots(), 1)
+        self.clock.advance(Backoff.WINDOW - 1)
+        self.assertEqual(backoff.restricted_slots(), 1)
+        self.clock.advance(1)
+        self.assertEqual(backoff.restricted_slots(), 0)
+        self.assertEqual(self.report(backoff, 1), [False])
+
+
 class TestSetSlots(BackoffTestCase):
     def test_threshold_follows_the_slots(self):
         backoff = self.backoff(1)

@@ -317,8 +317,11 @@ class TestHeader(ViewTestCase):
             self.assertLessEqual(col - 1 + ANSI.len(text), self.WIDTH, (row, text))
 
     def test_clock_and_uptime(self):
-        self.clock[0] += 2 * Util.SECONDS_PER_DAY + 3723
-        first, _, _ = self.rows()
+        # The uptime is wall clock time, including time the computer slept
+        later = NOW + 2 * Util.SECONDS_PER_DAY + 3723
+        self.clock[0] += 60  # the monotonic clock is not used for it
+        with mock.patch("vidl.view.time", return_value=later):
+            first, _, _ = self.rows()
         self.assertIn("ViDL", first)
         self.assertTrue(first.endswith(f"{Util.get_time()}  up 2d 01:02:03"), first)
 
@@ -384,7 +387,7 @@ class TestHeader(ViewTestCase):
 
     def test_header_status_and_shutdown(self):
         self.header.set_header_status("Finishing 2 downloads")
-        self.assertIn("--- Finishing 2 downloads", self.rows()[1])
+        self.assertTrue(self.rows()[1].startswith("Finishing 2 downloads"))
         self.header.set_status(
             View.Status(State.INACTIVE, message="Shutdown in progress")
         )

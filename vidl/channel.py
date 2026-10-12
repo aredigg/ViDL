@@ -444,10 +444,15 @@ class Channel:
     def __stop_requested(self) -> bool:
         return self.__halt_event.is_set() or self.__draining()
 
-    # Sleeps, returns True when a halt or drain ended the sleep early
+    # Sleeps, returns True when a halt or drain ended the sleep early.
+    # The end is observed on the wall clock: the monotonic clock stops while
+    # the computer sleeps (macOS), and would oversleep by that time. The
+    # monotonic clock only ends the sleep when the wall clock was set back,
+    # as it never runs ahead of real time.
     def __sleep(self, seconds: float) -> bool:
-        end = monotonic() + seconds
-        while (remaining := end - monotonic()) > 0:
+        end = time() + seconds
+        monotonic_end = monotonic() + seconds
+        while (remaining := min(end - time(), monotonic_end - monotonic())) > 0:
             if self.__halt_event.wait(min(Channel.SLEEP_STEP, remaining)):
                 return True
             if self.__draining():

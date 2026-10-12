@@ -171,7 +171,9 @@ class Monitor:
         paths: Sequence[tuple[str, str]],
         update_check: bool = True,
         network_check: bool = True,
-        clock: Callable[[], float] = time.monotonic,
+        # The wall clock, as the monotonic clock stops while the computer
+        # sleeps (macOS), which would delay checks by that time
+        clock: Callable[[], float] = time.time,
         urlopen: Callable[
             ..., AbstractContextManager[_Response]
         ] = urllib.request.urlopen,
@@ -383,6 +385,11 @@ class Monitor:
     # has changed, so identity tells whether there is something to publish
     def __update_locked(self) -> None:
         now = self.__clock()
+        if self.__errors and self.__errors[-1] > now:
+            # The clock was set back, the errors count from now
+            self.__errors = deque(
+                (min(t, now) for t in self.__errors), maxlen=self.__errors.maxlen
+            )
         while self.__errors and now - self.__errors[0] >= self.NETWORK_ERROR_WINDOW:
             _ = self.__errors.popleft()
         network = self.__probe_state
@@ -434,7 +441,11 @@ class Monitor:
             for index, (name, check) in enumerate(checks):
                 if self.__halt_event.is_set():
                     return
-                if self.__clock() < due[index]:
+                now = self.__clock()
+                # When the clock was set back, a check is never delayed by more
+                # than its interval
+                due[index] = min(due[index], now + self.__interval(name))
+                if now < due[index]:
                     continue
                 self.__run_check(name, check)
                 due[index] = self.__clock() + self.__interval(name)

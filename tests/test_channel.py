@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import unittest
+from collections.abc import Callable
 from queue import Queue
 from threading import Event
 from typing import Any, TypeVar, cast
@@ -605,6 +606,66 @@ class SleepRecorder:
             return False
 
         return mock.patch.object(Channel, "_Channel__sleep", sleep)
+
+
+class TestSleep(ChannelTestCase):
+    """Channel.__sleep with controlled clocks."""
+
+    def setUp(self):
+        super().setUp()
+        self.wall = [1_000_000.0]
+        self.mono = [500.0]
+        for target, clock in (
+            ("vidl.channel.time", self.wall),
+            ("vidl.channel.monotonic", self.mono),
+        ):
+            patcher = mock.patch(target, side_effect=lambda c=clock: c[0])
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        step = mock.patch.object(Channel, "SLEEP_STEP", 0.01)
+        step.start()
+        self.addCleanup(step.stop)
+        self.channel = Channel("a", None, None, None, None)
+        self.channel.set_halt_event(self.halt)
+
+    def sleep(self, seconds: float, change: Callable[[], None]) -> tuple[bool, float]:
+        timer = threading.Timer(0.05, change)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        started = time.monotonic()
+        result = self.channel._Channel__sleep(seconds)  # pyright: ignore[reportAttributeAccessIssue]
+        return result, time.monotonic() - started
+
+    def test_time_asleep_counts(self):
+        # The computer slept: the wall clock passed the end, the monotonic
+        # clock did not advance (macOS)
+        def suspend() -> None:
+            self.wall[0] += 600
+
+        result, elapsed = self.sleep(300, suspend)
+        self.assertFalse(result)
+        self.assertLess(elapsed, 2)
+
+    def test_set_back_wall_clock_does_not_extend_the_sleep(self):
+        def set_back_and_pass() -> None:
+            self.wall[0] -= 3600
+            self.mono[0] += 300
+
+        result, elapsed = self.sleep(300, set_back_and_pass)
+        self.assertFalse(result)
+        self.assertLess(elapsed, 2)
+
+    def test_sleeps_until_the_end(self):
+        def almost() -> None:
+            self.wall[0] += 299
+            self.mono[0] += 299
+
+        timer = threading.Timer(0.3, lambda: self.halt.set())
+        self.addCleanup(timer.cancel)
+        timer.start()
+        result, elapsed = self.sleep(300, almost)
+        self.assertTrue(result)  # still sleeping when halted
+        self.assertGreaterEqual(elapsed, 0.25)
 
 
 class TestBackoff(ChannelTestCase):

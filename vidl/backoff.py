@@ -21,11 +21,14 @@ class Backoff:
     DURATION: float = 6 * Util.SECONDS_PER_HOUR  # Length of a global back-off
     WAIT_STEP: float = 1.0  # Max seconds between event checks in wait()
 
-    def __init__(
-        self, slots: int = 1, clock: Callable[[], float] = time.monotonic
-    ) -> None:
+    # The wall clock is used: the monotonic clock stops while the computer
+    # sleeps (macOS), so a back-off would last longer by that time. When the
+    # wall clock is set back, the stored times are moved back with it, so a
+    # back-off never lasts longer than DURATION, nor a report than WINDOW.
+    def __init__(self, slots: int = 1, clock: Callable[[], float] = time.time) -> None:
         self.__lock = Lock()
         self.__clock = clock
+        self.__last: float | None = None  # the time last read from the clock
         self.__slots = max(1, slots)
         self.__restrictions: dict[int, float] = {}  # Slot -> time of report
         self.__until: float | None = None
@@ -42,7 +45,7 @@ class Backoff:
     def report_restriction(self, slot: int, reason: str = "") -> bool:
         name = Backoff.__name(slot)
         with self.__lock:
-            now = self.__clock()
+            now = self.__now()
             if self.__active(now):
                 # Reports from slots finishing work during a back-off must not carry over
                 left = Backoff.__format(self.__remaining(now))
@@ -73,23 +76,23 @@ class Backoff:
     def report_success(self, slot: int) -> None:
         with self.__lock:
             _ = self.__restrictions.pop(slot, None)
-            self.__purge(self.__clock())
+            self.__purge(self.__now())
 
     def active(self) -> bool:
         with self.__lock:
-            now = self.__clock()
+            now = self.__now()
             self.__purge(now)
             return self.__active(now)
 
     def remaining(self) -> float:
         with self.__lock:
-            now = self.__clock()
+            now = self.__now()
             self.__purge(now)
             return self.__remaining(now)
 
     def restricted_slots(self) -> int:
         with self.__lock:
-            self.__purge(self.__clock())
+            self.__purge(self.__now())
             return len(self.__restrictions)
 
     # Blocks while a back-off is active. Returns True as soon as any of the
@@ -109,6 +112,19 @@ class Backoff:
         if self.__slots <= 1:
             return 1
         return max(2, math.ceil(self.__slots / 2))
+
+    # The current time. A clock set back moves the stored times back as well,
+    # while time passed asleep (the clock jumping ahead) counts
+    def __now(self) -> float:
+        now = self.__clock()
+        if self.__last is not None and now < self.__last:
+            shift = now - self.__last
+            if self.__until is not None:
+                self.__until += shift
+            for slot in self.__restrictions:
+                self.__restrictions[slot] += shift
+        self.__last = now
+        return now
 
     def __active(self, now: float) -> bool:
         return self.__until is not None and now < self.__until

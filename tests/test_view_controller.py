@@ -1,5 +1,6 @@
 # pyright: standard
 import os
+import re
 import time
 import unittest
 from unittest import mock
@@ -225,9 +226,8 @@ class TestDispatch(ControllerTestCase):
         self.assertEqual(self.commands(), [AddChannelCommand("https://x")])
 
     def test_header_notice_and_system_status(self):
-        self.dispatch(HeaderMessage(status="Finishing", title="⏹️"))
+        self.dispatch(HeaderMessage(status="Finishing"))
         self.assertEqual(private(self.header(), View, "header_status"), "Finishing")
-        self.assertEqual(private(self.controller, ViewController, "title"), "⏹️")
         self.dispatch(NoticeMessage(text="Added", error=False))
         self.assertEqual(private(self.header(), View, "notice")[:2], ("Added", False))
         status = SystemStatus()
@@ -252,13 +252,17 @@ class TestRunning(ControllerTestCase):
         controller = self.start()
         self.assertIsNot(controller.get_queue(), controller.get_command_queue())
 
-    def test_title_bar_shows_the_header_title(self):
+    def test_title_bar_shows_only_the_slots(self):
         controller = self.start()
         controller.get_queue().put(InitMessage(index=0, provider=SLOT))
-        controller.get_queue().put(HeaderMessage(status="s", title="💤 12:00"))
+        controller.get_queue().put(HeaderMessage(status="Backing off until 12:00"))
+        blank = View.COUNTDOWN[0]
         self.assertTrue(
-            wait_until(lambda: "\x1b]2;💤 12:00 | 1 " in self.stdout.getvalue())
+            wait_until(lambda: f"\x1b]2;1 ⚫ {blank}\x1b\\" in self.stdout.getvalue())
         )
+        # Empty before the slot is known, then only the slot
+        titles = re.findall(r"\x1b\]2;(.*?)\x1b\\", self.stdout.getvalue())
+        self.assertTrue(all(t in ("", f"1 ⚫ {blank}") for t in titles), titles)
 
     def test_cursor_is_hidden_without_a_prompt(self):
         controller = self.start()

@@ -30,11 +30,10 @@ class InputMessage(Message):
 
 
 # A lasting state shown in the header, e.g. a pending quit or a back-off.
-# An empty status clears it, title is a short form for the title bar
+# An empty status clears it
 @dataclass
 class HeaderMessage(Message):
     status: str
-    title: str = ""
 
 
 # A short lived notice shown in the header, e.g. the result of a command

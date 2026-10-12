@@ -41,7 +41,7 @@ class Coordinator:
         self.__monitor: Monitor | None = None
         # Idle slots already shown the current back-off
         self.__backoff_shown: set[int] = set()
-        self.__header: tuple[str, str] = ("", "")
+        self.__header = ""
         self.__view = ViewController()
         self.__view_queue = self.__view.get_queue()
         self.__command_queue = self.__view.get_command_queue()
@@ -183,23 +183,20 @@ class Coordinator:
     # The lasting states shown in the header: a pending quit and a back-off
     def __update_header(self) -> None:
         status: list[str] = []
-        title: list[str] = []
         if self.__draining:
             busy = self.__busy_slots()
             status.append(
                 f"Finishing {busy} download{'s' if busy != 1 else ''}, "
                 + "c to continue, q to quit now"
             )
-            title.append("⏹️")
         backoff = self.__shared.backoff
         if backoff.active():
             until = Util.get_time(int(time() + backoff.remaining()))
             status.append(f"Backing off until {until}, too many restricted slots")
-            title.append(f"💤 {until}")
-        header = (" · ".join(status), " ".join(title))
+        header = " · ".join(status)
         if header != self.__header:
             self.__header = header
-            self.__view_queue.put(HeaderMessage(status=header[0], title=header[1]))
+            self.__view_queue.put(HeaderMessage(status=header))
 
     def __next_channel(self):
         return min(

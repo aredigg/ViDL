@@ -473,7 +473,6 @@ class TestBackoff(CoordinatorTestCase):
         self.assertTrue(all(m.required and m.sleep_time > 0 for m in sleeps))
         headers = [m for m in messages if isinstance(m, HeaderMessage)]
         self.assertTrue(headers[0].status.startswith("Backing off until"))
-        self.assertIn("💤", headers[0].title)
 
     def test_channels_start_again_when_the_back_off_ends(self):
         coordinator = Coordinator()

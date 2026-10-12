@@ -50,7 +50,6 @@ class ViewController:
         # Commands from the keyboard, handled by the coordinator
         self.__command_queue: Queue[Command] = Queue()
         self.__controls = Controls(self.__command_queue.put)
-        self.__title = ""
         self.__halt_event = Event()
         self.__thread = Thread(
             target=self.__run, name=f"ViewController-{ViewController.index}"
@@ -121,7 +120,8 @@ class ViewController:
                 return True
 
     def __update(self, terminal: Terminal, tacho: int) -> None:
-        title_bar: list[str] = [self.__title] if self.__title else []
+        # Only the slot states, to be read at a glance
+        title_bar: list[str] = []
         for view in self.__views.values():
             view.update(terminal, tacho)
             if view.get_top_index() > 0:
@@ -185,7 +185,6 @@ class ViewController:
     @__dispatch_message.register
     def _(self, message: HeaderMessage):
         self.__views[View.HEADER].set_header_status(message.status)
-        self.__title = message.title
 
     @__dispatch_message.register
     def _(self, message: NoticeMessage):

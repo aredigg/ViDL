@@ -1,11 +1,64 @@
 # pyright: standard
 import io
 import os
+import re
 import unittest
+from collections.abc import Callable, Mapping
 from contextlib import redirect_stderr, redirect_stdout
+from typing import Any, cast
+
+from yt_dlp import YoutubeDL
 
 from tests.helpers import IsolatedTestCase
 from vidl.config import Config
+
+
+class TestYoutubeDLSettings(IsolatedTestCase):
+    def test_every_setting_is_a_documented_yt_dlp_option(self):
+        # yt-dlp ignores unknown options silently, e.g. the command line name
+        # "extractor-args" instead of "extractor_args"
+        documentation = YoutubeDL.__doc__ or ""
+        for key in Config.ydl_settings:
+            with self.subTest(key=key):
+                found = re.search(
+                    rf"(?<![\w-]){re.escape(key)}(?![\w-])", documentation
+                )
+                self.assertIsNotNone(found, f"{key} is not a yt-dlp option")
+
+    def test_extractor_arguments_are_read_by_yt_dlp(self):
+        # Lists as values: a string is split into letters, a hyphenated name is
+        # not read at all
+        for params, expected in (
+            ({"extractor_args": {"youtube": {"skip": ["hls"]}}}, ["hls"]),
+            ({"extractor_args": {"youtube": {"skip": "hls"}}}, ["h", "l", "s"]),
+            ({"extractor-args": {"youtube": {"skip": ["hls"]}}}, []),
+        ):
+            with self.subTest(params=params):
+                ydl = self.ydl(params)
+                extractor = cast(Any, ydl.get_info_extractor("Youtube"))
+                self.assertEqual(extractor._configuration_arg("skip"), expected)
+
+    def ydl(self, params: Mapping[str, object]) -> YoutubeDL:
+        factory = cast(Callable[[dict[str, object]], YoutubeDL], YoutubeDL)
+        ydl = factory({"quiet": True, **params})
+        self.addCleanup(ydl.close)
+        return ydl
+
+    def test_real_yt_dlp_accepts_the_settings(self):
+        params = cast(dict[str, object], self.ydl(Config.ydl_settings).params)
+        self.assertEqual(params["subtitlesformat"], "vtt/srt/best")
+        self.assertEqual(params["subtitleslangs"], ["all", "-live_chat"])
+
+    def test_live_chat_is_left_out_of_all_subtitles(self):
+        # "all" with "-live_chat" selects every language but the chat
+        ydl = cast(Any, self.ydl(Config.ydl_settings))
+        subtitles = {
+            "en": [{"ext": "vtt", "url": "https://x/en"}],
+            "de": [{"ext": "vtt", "url": "https://x/de"}],
+            "live_chat": [{"ext": "json", "url": "https://x/chat"}],
+        }
+        chosen = ydl.process_subtitles("abc", subtitles, {})
+        self.assertEqual(sorted(chosen), ["de", "en"])
 
 
 class TestInterpret(unittest.TestCase):
@@ -143,6 +196,26 @@ class TestValidate(IsolatedTestCase):
         self.assertIn("Channels.slots", self.validate()[1])
         Config.settings["Channels"]["slots"] = "two"
         self.assertIn("Channels.slots must be an integer", self.validate()[1])
+
+    def test_size_options(self):
+        for key in ("maximum_size", "exclusive_size"):
+            for value in (0, 10, 2.5, 0.0):
+                with self.subTest(key=key, value=value):
+                    Config.settings["Download"][key] = value
+                    self.assertEqual(self.validate(), (True, ""))
+            for value in (-1, -0.5, "5", None, True, float("nan"), float("inf")):
+                with self.subTest(key=key, value=value):
+                    Config.settings["Download"][key] = value
+                    result, errors = self.validate()
+                    self.assertFalse(result)
+                    self.assertIn(
+                        f"Download.{key} must be a non-negative number", errors
+                    )
+            Config.settings["Download"][key] = 0
+
+    def test_size_defaults(self):
+        self.assertEqual(Config.settings["Download"]["maximum_size"], 0)
+        self.assertEqual(Config.settings["Download"]["exclusive_size"], 10)
 
     def test_metadata_options(self):
         for thumbnail in ("channel", "video", None):

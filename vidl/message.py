@@ -29,7 +29,7 @@ class InputMessage(Message):
     keys: tuple[Key, ...]
 
 
-# A lasting state shown in the header, e.g. a pending quit or a back-off.
+# A lasting state shown in the header, e.g. a pending quit or a suspension.
 # An empty status clears it
 @dataclass
 class HeaderMessage(Message):

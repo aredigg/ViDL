@@ -202,6 +202,39 @@ class TestFormats(unittest.TestCase):
         best = Item.enumerate_best_format({"formats": formats})
         self.assertEqual(best, formats[3])
 
+    def test_hls_only_wins_on_a_higher_resolution(self):
+        hls = {"ext": "mp4", "height": 1080, "fps": 30, "protocol": "m3u8_native"}
+        https = {"ext": "mp4", "height": 1080, "fps": 30, "protocol": "https"}
+        # The same quality: https wins, whatever the order
+        for formats in ([hls, https], [https, hls]):
+            self.assertIs(Item.enumerate_best_format({"formats": formats}), https)
+        # Even with better audio, as the protocol comes first
+        louder = {**hls, "audio_channels": 6, "asr": 48000}
+        self.assertIs(Item.enumerate_best_format({"formats": [louder, https]}), https)
+        # A higher resolution, frame rate or range still wins
+        for better in (
+            {**hls, "height": 1440},
+            {**hls, "fps": 60},
+            {**hls, "dynamic_range": "HDR10"},
+        ):
+            self.assertIs(
+                Item.enumerate_best_format({"formats": [https, better]}), better
+            )
+
+    def test_is_hls(self):
+        for protocol, expected in (
+            ("m3u8", True),
+            ("m3u8_native", True),
+            ("M3U8_NATIVE", True),
+            ("https", False),
+            ("http_dash_segments", False),
+            (None, False),
+            (5, False),
+        ):
+            with self.subTest(protocol=protocol):
+                self.assertIs(Item.is_hls({"protocol": protocol}), expected)
+        self.assertFalse(Item.is_hls({}))
+
     def test_enumerate_best_format_other_extension_and_none(self):
         formats = [{"ext": "webm", "height": 2160}, {"ext": "mp4", "height": 720}]
         self.assertEqual(

@@ -205,6 +205,10 @@ class Error:
         re.IGNORECASE | re.MULTILINE,
     )
     SENTENCE_END: re.Pattern[str] = re.compile(r"[.!?](?=\s)")
+    COOKIE_ROTATION: re.Pattern[str] = re.compile(
+        r"account cookies are no longer valid|cookies have (?:likely )?been rotated",
+        re.IGNORECASE,
+    )
     # URLs are of no use in a short summary, nor a word leading to one
     SUMMARY_URL: re.Pattern[str] = re.compile(
         r"(?:\s+(?:at|on|from|see|via|visit))?\s*(?<![\w+.-])[A-Za-z][\w+.-]*://\S+",
@@ -446,6 +450,12 @@ class Error:
     @property
     def restriction(self) -> bool:
         return self.kind is Error.Kind.RESTRICTION
+
+    # yt-dlp only warns when the cookies of a logged in YouTube session were
+    # rotated, see vidl/cookies.py
+    @staticmethod
+    def is_cookie_rotation(text: str) -> bool:
+        return Error.COOKIE_ROTATION.search(ANSI.remove(text)) is not None
 
     @property
     def display(self) -> str:

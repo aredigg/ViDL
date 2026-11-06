@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 import unittest
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from queue import Queue
 from threading import Event
 from typing import Any, TypeVar, cast
@@ -15,9 +15,9 @@ from yt_dlp.networking.exceptions import TransportError
 from yt_dlp.utils import DownloadError, ExtractorError
 
 from tests.helpers import FakeProcessor, IsolatedTestCase, drain, playlist, video
-from vidl.backoff import Backoff
 from vidl.channel import Channel, ChannelHelper
 from vidl.config import Config
+from vidl.cookies import CookieWatch, Refresh
 from vidl.message import (
     CountMessage,
     CutoffMessage,
@@ -28,9 +28,17 @@ from vidl.message import (
     Message,
     PathMessage,
     SleepMessage,
+    WarningMessage,
 )
 from vidl.metadata import MetadataContext, MetadataPostProcessor
+from vidl.preflight import (
+    Preflight,
+    PreflightError,
+    PreflightInterrupted,
+    PreflightReason,
+)
 from vidl.shared import Shared
+from vidl.suspension import Suspension
 from vidl.util import Util
 
 DAY = Util.SECONDS_PER_DAY
@@ -97,16 +105,30 @@ class TestChannelState(ChannelTestCase):
         channel = Channel("Name", None, "10", "not a date", None)
         self.assertEqual(channel.row(), ["Name", "", 0, 0, ""])
 
-    def test_last_date_prefers_download_over_attempt(self):
-        self.assertEqual(
-            Channel("a", None, 100, 200, None).get_last_date().timestamp(), 100
+    def test_queue_key_is_the_attempt_then_the_download(self):
+        cases = (
+            (Channel("a", None, 100, 200, None), (200, 100)),
+            (Channel("a", None, 0, 200, None), (200, 0)),
+            # No attempt recorded, e.g. a file from an older version
+            (Channel("a", None, 100, 0, None), (100, 100)),
+            (Channel("a", None, None, None, None), (0, 0)),
         )
-        self.assertEqual(
-            Channel("a", None, 0, 200, None).get_last_date().timestamp(), 200
-        )
-        self.assertEqual(
-            Channel("a", None, None, None, None).get_last_date().timestamp(), 0
-        )
+        for channel, key in cases:
+            with self.subTest(key=key):
+                self.assertEqual(channel.queue_key(), key)
+
+    def test_a_failing_channel_goes_behind_the_others(self):
+        # It was downloaded from long ago, but is tried most recently
+        failing = Channel("failing", None, 100, 5000, "Network error")
+        waiting = Channel("waiting", None, 4000, 4000, None)
+        never = Channel("never", None, None, None, None)
+        order = sorted([failing, waiting, never], key=Channel.queue_key)
+        self.assertEqual([c.get_name() for c in order], ["never", "waiting", "failing"])
+
+    def test_equal_attempts_are_ordered_by_download(self):
+        a = Channel("a", None, 300, 500, None)
+        b = Channel("b", None, 100, 500, None)
+        self.assertEqual(sorted([a, b], key=Channel.queue_key), [b, a])
 
     def test_active_state(self):
         channel = Channel("a", None, None, None, None)
@@ -122,6 +144,53 @@ class TestChannelState(ChannelTestCase):
         self.assertEqual(channel.get_epoch_cutoff(), (123, True))
         channel.report_error("failed")
         self.assertEqual(channel.get_last_error(), "failed")
+
+
+class TestAttempts(ChannelTestCase):
+    def test_a_failed_attempt_moves_the_channel_back(self):
+        error = download_error(ExtractorError("gone", video_id="abc", expected=True))
+        processor = FakeProcessor({"https://c": error})
+        channel = Channel("https://c", None, 100, 200, None)
+        channel.set_halt_event(self.halt)
+        before = int(time.time())
+        self.assertFalse(channel.download(0, processor.processor, self.queue))
+        self.assertGreaterEqual(channel.queue_key()[0], before)
+        self.assertEqual(channel.row()[2], 100)  # no new download date
+
+    def test_an_interrupted_attempt_keeps_its_place(self):
+        processor = FakeProcessor({"https://c": playlist("p", ["https://v/a"])})
+        self.halt.set()
+        channel = Channel("https://c", None, 100, 200, "old")
+        channel.set_halt_event(self.halt)
+        self.assertFalse(channel.download(0, processor.processor, self.queue))
+        self.assertTrue(channel.interrupted())
+        self.assertEqual(channel.queue_key(), (200, 100))
+
+    def test_a_drain_between_entries_keeps_its_place(self):
+        shared = Shared()
+        processor = FakeProcessor(
+            {
+                "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+                "https://v/a": video("a"),
+                "https://v/b": video("b"),
+            }
+        )
+        processor.on_download = lambda _: shared.drain_event.set()
+        channel = Channel("https://c", None, 100, 200, None)
+        channel.set_halt_event(self.halt)
+        channel.set_shared(shared)
+        self.assertFalse(channel.download(0, processor.processor, self.queue))
+        self.assertEqual(channel.queue_key(), (200, 100))
+
+    def test_a_completed_attempt_updates_both_dates(self):
+        processor = FakeProcessor({"https://c": video("vid")})
+        channel = Channel("https://c", None, 100, 200, "old")
+        channel.set_halt_event(self.halt)
+        before = int(time.time())
+        self.assertTrue(channel.download(0, processor.processor, self.queue))
+        attempt, download = channel.queue_key()
+        self.assertGreaterEqual(attempt, before)
+        self.assertGreaterEqual(download, before)
 
 
 class TestVideo(ChannelTestCase):
@@ -376,8 +445,8 @@ class TestErrors(ChannelTestCase):
         self.assertEqual(reports[0], "error")
         self.assertIn("success", reports[1:])
 
-    def test_restriction_without_back_off_pauses_briefly(self):
-        # Without shared state there is no back-off, only the grace pause
+    def test_restriction_without_suspension_pauses_briefly(self):
+        # Without shared state there is no suspension, only the grace pause
         error = ExtractorError("Video unavailable", video_id="abc", expected=True)
         processor = FakeProcessor({"https://c": download_error(error)})
         sleeps: list[float] = []
@@ -388,11 +457,11 @@ class TestErrors(ChannelTestCase):
 
         with mock.patch.object(Channel, "_Channel__sleep", sleep):
             channel, _ = self.run_channel(processor)
-        self.assertEqual(sleeps, [Channel.BACKOFF_GRACE])
+        self.assertEqual(sleeps, [Channel.RESTRICTION_PAUSE])
         self.assertEqual(channel.get_last_error(), "abc: Video unavailable")
         self.assertEqual(self.messages(SleepMessage), [])
 
-    def test_halt_during_backoff_grace_skips_the_sleep(self):
+    def test_halt_during_suspension_grace_skips_the_sleep(self):
         error = ExtractorError("Video unavailable", video_id="abc", expected=True)
 
         def halted_while_extracting(_: str) -> DownloadError:
@@ -403,7 +472,7 @@ class TestErrors(ChannelTestCase):
         started = time.monotonic()
         _, result = self.run_channel(processor)
         self.assertFalse(result)
-        self.assertLess(time.monotonic() - started, Channel.BACKOFF_GRACE)
+        self.assertLess(time.monotonic() - started, Channel.RESTRICTION_PAUSE)
         self.assertEqual(self.messages(SleepMessage), [])
 
     def test_halted_channel_does_not_extract(self):
@@ -412,7 +481,10 @@ class TestErrors(ChannelTestCase):
         channel, result = self.run_channel(processor)
         self.assertFalse(result)
         self.assertEqual(processor.extracted, [])
-        self.assertEqual(channel.get_last_error(), "Got halted")
+        # Halting is neither a success nor an error, the channel keeps its place
+        self.assertTrue(channel.interrupted())
+        self.assertIsNone(channel.get_last_error())
+        self.assertEqual(channel.queue_key(), (0, 0))
 
 
 class TestPlaylist(ChannelTestCase):
@@ -668,7 +740,7 @@ class TestSleep(ChannelTestCase):
         self.assertGreaterEqual(elapsed, 0.25)
 
 
-class TestBackoff(ChannelTestCase):
+class TestSuspension(ChannelTestCase):
     def setUp(self):
         super().setUp()
         self.clock = FakeClock()
@@ -676,44 +748,44 @@ class TestBackoff(ChannelTestCase):
         patcher = self.recorder.patch()
         patcher.start()
         self.addCleanup(patcher.stop)
-        step = mock.patch.object(Backoff, "WAIT_STEP", 0.01)
+        step = mock.patch.object(Suspension, "WAIT_STEP", 0.01)
         step.start()
         self.addCleanup(step.stop)
 
     def shared(self, slots: int) -> Shared:
-        return Shared(backoff=Backoff(slots=slots, clock=self.clock))
+        return Shared(suspension=Suspension(slots=slots, clock=self.clock))
 
-    def test_single_slot_restriction_starts_the_back_off(self):
+    def test_single_slot_restriction_starts_the_suspension(self):
         shared = self.shared(1)
         channel, result = self.run_channel(
             FakeProcessor({"https://c": unavailable()}), shared=shared
         )
         self.assertFalse(result)
-        self.assertTrue(shared.backoff.active())
+        self.assertTrue(shared.suspension.active())
         self.assertEqual(channel.get_last_error(), "abc: Video unavailable")
         self.assertEqual(self.recorder.sleeps, [])  # no grace pause
 
     def test_restriction_in_one_of_two_slots_only_pauses(self):
         shared = self.shared(2)
         self.run_channel(FakeProcessor({"https://c": unavailable()}), shared=shared)
-        self.assertFalse(shared.backoff.active())
-        self.assertEqual(self.recorder.sleeps, [Channel.BACKOFF_GRACE])
+        self.assertFalse(shared.suspension.active())
+        self.assertEqual(self.recorder.sleeps, [Channel.RESTRICTION_PAUSE])
 
-    def test_restrictions_in_both_slots_start_the_back_off(self):
+    def test_restrictions_in_both_slots_start_the_suspension(self):
         shared = self.shared(2)
         processor = FakeProcessor({"https://c": unavailable()})
         self.run_channel(processor, shared=shared, slot=0)
-        self.assertFalse(shared.backoff.active())
+        self.assertFalse(shared.suspension.active())
         self.run_channel(processor, shared=shared, slot=1)
-        self.assertTrue(shared.backoff.active())
-        self.assertEqual(self.recorder.sleeps, [Channel.BACKOFF_GRACE])
+        self.assertTrue(shared.suspension.active())
+        self.assertEqual(self.recorder.sleeps, [Channel.RESTRICTION_PAUSE])
 
-    def test_the_same_slot_twice_does_not_start_the_back_off(self):
+    def test_the_same_slot_twice_does_not_start_the_suspension(self):
         shared = self.shared(2)
         processor = FakeProcessor({"https://c": unavailable()})
         self.run_channel(processor, shared=shared, slot=0)
         self.run_channel(processor, shared=shared, slot=0)
-        self.assertFalse(shared.backoff.active())
+        self.assertFalse(shared.suspension.active())
 
     def test_rate_limits_and_bot_checks_are_restrictions(self):
         for text in (
@@ -725,29 +797,29 @@ class TestBackoff(ChannelTestCase):
                 shared = self.shared(1)
                 error = download_error(ExtractorError(text, expected=True))
                 self.run_channel(FakeProcessor({"https://c": error}), shared=shared)
-                self.assertTrue(shared.backoff.active())
+                self.assertTrue(shared.suspension.active())
 
     def test_permanent_errors_do_not_count(self):
         shared = self.shared(1)
         for text in ("Private video", "This video has been removed by the uploader"):
             error = download_error(ExtractorError(text, expected=True))
             self.run_channel(FakeProcessor({"https://c": error}), shared=shared)
-        self.assertFalse(shared.backoff.active())
-        self.assertEqual(shared.backoff.restricted_slots(), 0)
+        self.assertFalse(shared.suspension.active())
+        self.assertEqual(shared.suspension.restricted_slots(), 0)
         self.assertEqual(self.recorder.sleeps, [])
 
     def test_an_extracted_video_clears_the_slot(self):
         shared = self.shared(2)
         self.run_channel(FakeProcessor({"https://c": unavailable()}), shared=shared)
-        self.assertEqual(shared.backoff.restricted_slots(), 1)
+        self.assertEqual(shared.suspension.restricted_slots(), 1)
         self.run_channel(FakeProcessor({"https://c": video("v")}), shared=shared)
-        self.assertEqual(shared.backoff.restricted_slots(), 0)
+        self.assertEqual(shared.suspension.restricted_slots(), 0)
         self.run_channel(
             FakeProcessor({"https://c": unavailable()}), shared=shared, slot=1
         )
-        self.assertFalse(shared.backoff.active())
+        self.assertFalse(shared.suspension.active())
 
-    def test_the_next_entry_waits_for_the_back_off(self):
+    def test_the_next_entry_waits_for_the_suspension(self):
         shared = self.shared(1)
         processor = FakeProcessor(
             {
@@ -757,10 +829,10 @@ class TestBackoff(ChannelTestCase):
             }
         )
 
-        def end_back_off() -> None:
-            self.clock.now += Backoff.DURATION
+        def end_suspension() -> None:
+            self.clock.now += Suspension.DURATION
 
-        timer = threading.Timer(0.2, end_back_off)
+        timer = threading.Timer(0.2, end_suspension)
         self.addCleanup(timer.cancel)
         timer.start()
         started = time.monotonic()
@@ -774,9 +846,9 @@ class TestBackoff(ChannelTestCase):
             if m.required and m.provider == Message.Provider.CHANNEL
         ]
         self.assertEqual(len(required), 1)
-        self.assertEqual(required[0].sleep_time, Backoff.DURATION)
+        self.assertEqual(required[0].sleep_time, Suspension.DURATION)
 
-    def test_halt_or_drain_ends_the_back_off_wait(self):
+    def test_halt_or_drain_ends_the_suspension_wait(self):
         for stop in ("halt", "drain"):
             with self.subTest(stop=stop):
                 self.halt.clear()
@@ -938,12 +1010,16 @@ class TestMetadata(ChannelTestCase):
         self.pp = FakeMetadataPP()
         self.seen: dict[str, MetadataContext | None] = {}
 
-    def download(self, infos: dict[str, object]) -> FakeProcessor:
+    def download(
+        self, infos: dict[str, object], url: str = "https://c"
+    ) -> FakeProcessor:
         processor = FakeProcessor(infos)
         processor.on_download = lambda url: self.seen.__setitem__(
             url.rsplit("/", 1)[1], self.pp.current()
         )
-        self.run_channel(processor, metadata=cast(MetadataPostProcessor, self.pp))
+        self.run_channel(
+            processor, url=url, metadata=cast(MetadataPostProcessor, self.pp)
+        )
         return processor
 
     def channel_info(self, urls: list[str]) -> dict[str, object]:
@@ -991,6 +1067,82 @@ class TestMetadata(ChannelTestCase):
         context = cast(MetadataContext, self.seen["vid"])
         self.assertIsNone(context.episode_number)
         self.assertEqual(context.series, "Chan")
+        self.assertEqual(context.season_number, 1)
+
+    def test_the_channel_description_is_the_one_of_the_channel(self):
+        info = self.channel_info(["https://v/a"])
+        info["description"] = "  About the channel \n"
+        self.download({"https://c": info, "https://v/a": video("a")})
+        context = cast(MetadataContext, self.seen["a"])
+        self.assertEqual(context.channel_description, "About the channel")
+
+    def test_the_description_of_a_single_video_is_not_a_channel_description(self):
+        self.download(
+            {"https://c": video("vid", channel="Chan", description="The video")}
+        )
+        context = cast(MetadataContext, self.seen["vid"])
+        self.assertIsNone(context.channel_description)
+
+    def test_groups_of_tabs_and_playlists(self):
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(
+                [
+                    "https://c/videos",
+                    "https://c/shorts",
+                    "https://c/streams",
+                    "https://c/playlist?list=PLabc",
+                ]
+            ),
+            "https://c/videos": playlist("v", ["https://v/va"], title="Chan - Videos"),
+            "https://c/shorts": playlist("s", ["https://v/sa"]),
+            "https://c/streams": playlist("l", ["https://v/la"]),
+            "https://c/playlist?list=PLabc": playlist(
+                "PLabc", ["https://v/pa"], title="  My   favourite\nvideos "
+            ),
+            "https://v/va": video("va"),
+            "https://v/sa": video("sa"),
+            "https://v/la": video("la"),
+            "https://v/pa": video("pa"),
+        }
+        self.download(infos)
+        groups = {k: cast(MetadataContext, v).group for k, v in self.seen.items()}
+        self.assertEqual(
+            groups,
+            {
+                "va": None,  # the plain videos tab is no grouping
+                "sa": "Shorts",
+                "la": "Live",
+                "pa": "My favourite videos",
+            },
+        )
+
+    def test_a_playlist_url_gives_its_title_as_group(self):
+        url = "https://www.youtube.com/playlist?list=PLabc"
+        infos: dict[str, object] = {
+            url: playlist("PLabc", ["https://v/a"], title="Road trip"),
+            "https://v/a": video("a"),
+        }
+        self.download(infos, url=url)
+        self.assertEqual(cast(MetadataContext, self.seen["a"]).group, "Road trip")
+
+    def test_a_channel_without_tab_has_no_group(self):
+        infos: dict[str, object] = {
+            "https://www.youtube.com/@chan": playlist("c", ["https://v/a"]),
+            "https://v/a": video("a"),
+        }
+        self.download(infos, url="https://www.youtube.com/@chan")
+        self.assertIsNone(cast(MetadataContext, self.seen["a"]).group)
+
+    def test_unknown_urls_have_no_group(self):
+        for url in ("https://c", "https://c/", "https://[bad", "not a url"):
+            with self.subTest(url=url):
+                self.seen.clear()
+                infos: dict[str, object] = {
+                    url: playlist("p", ["https://v/a"]),
+                    "https://v/a": video("a"),
+                }
+                self.download(infos, url=url)
+                self.assertIsNone(cast(MetadataContext, self.seen["a"]).group)
 
     def test_disabled_options(self):
         Config.settings["Download"].update(metadata=False, thumbnail="video")
@@ -1001,6 +1153,290 @@ class TestMetadata(ChannelTestCase):
     def test_without_a_metadata_processor_nothing_is_set(self):
         processor = FakeProcessor({"https://c": video("vid")})
         self.assertTrue(self.run_channel(processor)[1])
+
+
+class FakePreflight:
+    """Stands in for Preflight: finish() is recorded, on_start may raise."""
+
+    def __init__(self) -> None:
+        self.finished = 0
+
+    def finish(self) -> None:
+        self.finished += 1
+
+
+class TempProcessor(FakeProcessor):
+    """A processor whose temporary files live in a real directory."""
+
+    def __init__(
+        self,
+        temp: str,
+        infos: Mapping[str, object] | None = None,
+        archive: bool = False,
+    ) -> None:
+        super().__init__(infos, archive)
+        self.temp = temp
+
+    def prepare_filename(self, info: dict[str, object], dir_type: str = "") -> str:
+        return os.path.join(self.temp, "Chan", "2024-01", f"{info.get('id')}.NA")
+
+
+class TestPreflight(ChannelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.temp = self.temp_dir()
+        Config.settings["Paths"]["temporary"] = self.temp
+        self.preflight = FakePreflight()
+        self.slot_messages: list[Message] = []
+
+    def refuse(
+        self, error: BaseException, archive: bool = True, url: str = "https://c"
+    ) -> tuple[Channel, bool, TempProcessor]:
+        processor = TempProcessor(
+            self.temp, {url: video("vid", NOW, channel="C")}, archive=archive
+        )
+
+        def refuse(_: str) -> None:
+            raise error
+
+        processor.on_download = refuse
+        channel = Channel(url, None, 100, 200, "old")
+        channel.set_halt_event(self.halt)
+        channel.set_preflight(cast(Preflight, self.preflight))
+        channel.set_active()
+        result = channel.download(0, processor.processor, self.queue)
+        return channel, result, processor
+
+    def write(self, *parts: str) -> str:
+        path = os.path.join(self.temp, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            _ = f.write(b"x")
+        return path
+
+    def test_a_video_that_is_too_large_is_archived_and_skipped(self):
+        error = PreflightError(
+            PreflightReason.TOO_LARGE, "Too large (14G)", archive=True
+        )
+        channel, result, processor = self.refuse(error)
+        self.assertFalse(result)
+        self.assertEqual(processor.archived, ["vid"])
+        self.assertEqual(channel.get_last_error(), "Too large (14G)")
+        (message,) = self.messages(ErrorMessage)
+        self.assertEqual((message.target, message.message), ("vid", "Too large (14G)"))
+        self.assertEqual(channel.row()[2], 100)  # no download is recorded
+        self.assertEqual(self.preflight.finished, 1)
+
+    def test_other_refusals_are_not_archived(self):
+        for reason, text in (
+            (PreflightReason.HLS_ONLY, "HLS only, poor quality"),
+            (PreflightReason.NO_SPACE, "No space in temp: need 12G, free 8G"),
+        ):
+            with self.subTest(reason=reason):
+                error = PreflightError(reason, text, retry=True)
+                channel, result, processor = self.refuse(error)
+                self.assertFalse(result)
+                self.assertEqual(processor.archived, [])
+                self.assertEqual(channel.get_last_error(), text)
+
+    def test_a_refusal_needs_no_pause_afterwards(self):
+        Config.settings["Download"]["sleep_interval"] = 30
+        error = PreflightError(PreflightReason.HLS_ONLY, "HLS only, poor quality")
+        started = time.monotonic()
+        self.refuse(error)
+        self.assertLess(time.monotonic() - started, 5)
+        sleeps = [
+            m
+            for m in self.messages(SleepMessage)
+            if m.provider == Message.Provider.CHANNEL
+        ]
+        self.assertEqual(sleeps, [])
+
+    def test_an_interruption_is_neither_an_error_nor_a_download(self):
+        channel, result, processor = self.refuse(PreflightInterrupted())
+        self.assertFalse(result)
+        self.assertTrue(channel.interrupted())
+        self.assertEqual(channel.get_last_error(), "old")
+        self.assertEqual(channel.queue_key(), (200, 100))  # keeps its place
+        self.assertEqual(self.messages(ErrorMessage), [])
+        self.assertEqual(processor.archived, [])
+        self.assertEqual(self.preflight.finished, 1)
+
+    def test_finish_is_called_after_a_download_too(self):
+        processor = TempProcessor(self.temp, {"https://c": video("vid")})
+        channel = Channel("https://c", None, None, None, None)
+        channel.set_halt_event(self.halt)
+        channel.set_preflight(cast(Preflight, self.preflight))
+        self.assertTrue(channel.download(0, processor.processor, self.queue))
+        self.assertEqual(self.preflight.finished, 1)
+
+    def test_finish_is_called_when_the_download_fails(self):
+        error = download_error(ExtractorError("gone", video_id="vid", expected=True))
+        processor = TempProcessor(self.temp, {"https://c": video("vid")})
+        processor.download_result = error
+        channel = Channel("https://c", None, None, None, None)
+        channel.set_halt_event(self.halt)
+        channel.set_preflight(cast(Preflight, self.preflight))
+        self.assertFalse(channel.download(0, processor.processor, self.queue))
+        self.assertEqual(self.preflight.finished, 1)
+
+    def test_leftovers_of_a_refused_video_are_removed(self):
+        subtitle = self.write("Chan", "2024-01", "vid.en.vtt")
+        thumbnail = self.write("Chan", "2024-01", "vid.jpg")
+        other = self.write("Chan", "2024-01", "other.en.vtt")
+        longer = self.write("Chan", "2024-01", "vid2.jpg")
+        elsewhere = self.write("Other", "vid.jpg")
+        error = PreflightError(PreflightReason.HLS_ONLY, "HLS only, poor quality")
+        self.refuse(error)
+        self.assertFalse(os.path.exists(subtitle))
+        self.assertFalse(os.path.exists(thumbnail))
+        # Only files of this video are removed
+        for path in (other, longer, elsewhere):
+            self.assertTrue(os.path.exists(path), path)
+
+    def test_leftovers_are_removed_when_interrupted_too(self):
+        subtitle = self.write("Chan", "2024-01", "vid.en.vtt")
+        self.refuse(PreflightInterrupted())
+        self.assertFalse(os.path.exists(subtitle))
+
+    def test_nothing_outside_the_temporary_directory_is_removed(self):
+        outside = self.temp_dir()
+        path = os.path.join(outside, "vid.jpg")
+        with open(path, "wb") as f:
+            _ = f.write(b"x")
+        # The processor names its temporary files outside the temporary directory
+        processor = TempProcessor(outside, {"https://c": video("vid")})
+        processor.prepare_filename = lambda info, dir_type="": path  # type: ignore[method-assign]
+        processor.on_download = lambda _: (_ for _ in ()).throw(
+            PreflightError(PreflightReason.HLS_ONLY, "HLS only, poor quality")
+        )
+        channel = Channel("https://c", None, None, None, None)
+        channel.set_halt_event(self.halt)
+        channel.set_active()
+        channel.download(0, processor.processor, self.queue)
+        self.assertTrue(os.path.exists(path))
+
+    def test_files_in_the_root_of_the_temporary_directory_are_kept(self):
+        path = self.write("vid.jpg")
+        processor = TempProcessor(self.temp, {"https://c": video("vid")})
+        processor.prepare_filename = lambda info, dir_type="": os.path.join(  # type: ignore[method-assign]
+            self.temp, "vid.NA"
+        )
+        processor.on_download = lambda _: (_ for _ in ()).throw(
+            PreflightError(PreflightReason.HLS_ONLY, "HLS only, poor quality")
+        )
+        channel = Channel("https://c", None, None, None, None)
+        channel.set_halt_event(self.halt)
+        channel.set_active()
+        channel.download(0, processor.processor, self.queue)
+        self.assertTrue(os.path.exists(path))
+
+    def test_a_refusal_inside_a_playlist_goes_on_with_the_next_entry(self):
+        infos: dict[str, object] = {
+            "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+            "https://v/a": video("a"),
+            "https://v/b": video("b"),
+        }
+        processor = TempProcessor(self.temp, infos)
+
+        def refuse_first(url: str) -> None:
+            if url.endswith("/a"):
+                raise PreflightError(
+                    PreflightReason.TOO_LARGE, "Too large (14G)", archive=True
+                )
+
+        processor.on_download = refuse_first
+        channel = Channel("https://c", None, None, None, None)
+        channel.set_halt_event(self.halt)
+        channel.set_preflight(cast(Preflight, self.preflight))
+        channel.set_active()
+        self.assertTrue(channel.download(0, processor.processor, self.queue))
+        self.assertEqual(self.downloaded_ids(processor), ["a", "b"])
+        self.assertEqual(self.preflight.finished, 2)
+
+
+class FakeCookies:
+    """Stands in for CookieWatch: returns the given results one by one."""
+
+    def __init__(self, *results: Refresh) -> None:
+        self.results = list(results)
+        self.processors: list[object] = []
+
+    def refresh(self, processor: object) -> Refresh:
+        self.processors.append(processor)
+        return self.results.pop(0) if self.results else Refresh.NOT_NEEDED
+
+
+class TestCookies(ChannelTestCase):
+    def run_with(
+        self, cookies: FakeCookies, processor: FakeProcessor, url: str = "https://c"
+    ) -> Channel:
+        channel = Channel(url, None, None, None, None)
+        channel.set_halt_event(self.halt)
+        channel.set_cookies(cast(CookieWatch, cookies))
+        channel.set_active()
+        channel.download(0, processor.processor, self.queue)
+        return channel
+
+    def warnings(self) -> list[tuple[str, str]]:
+        return [(m.target, m.message) for m in self.messages(WarningMessage)]
+
+    def test_checked_before_extracting_and_after_the_download(self):
+        cookies = FakeCookies()
+        processor = FakeProcessor({"https://c": video("vid")})
+        self.run_with(cookies, processor)
+        self.assertEqual(cookies.processors, [processor.processor] * 2)
+        self.assertEqual(self.warnings(), [])
+
+    def test_checked_for_each_entry_of_a_playlist(self):
+        cookies = FakeCookies()
+        infos: dict[str, object] = {
+            "https://c": playlist("p", ["https://v/a", "https://v/b"]),
+            "https://v/a": video("a"),
+            "https://v/b": video("b"),
+        }
+        self.run_with(cookies, FakeProcessor(infos))
+        # The playlist, and for each video before extracting and after
+        self.assertEqual(len(cookies.processors), 1 + 2 * 2)
+
+    def test_the_result_is_shown_in_the_panel(self):
+        for result, text in (
+            (Refresh.REFRESHED, "Rotated, reloaded from the browser"),
+            (Refresh.UNCHANGED, "Expired, log in again in the browser"),
+            (Refresh.FAILED, "Rotated, reading the browser failed"),
+        ):
+            with self.subTest(result=result):
+                cookies = FakeCookies(result)
+                self.run_with(cookies, FakeProcessor({"https://c": video("vid")}))
+                self.assertEqual(self.warnings(), [("Cookies", text)])
+
+    def test_nothing_is_shown_when_nothing_happened(self):
+        for result in (Refresh.NOT_NEEDED, Refresh.TOO_SOON):
+            with self.subTest(result=result):
+                cookies = FakeCookies(result, result)
+                self.run_with(cookies, FakeProcessor({"https://c": video("vid")}))
+                self.assertEqual(self.warnings(), [])
+
+    def test_a_refresh_does_not_stop_the_download(self):
+        cookies = FakeCookies(Refresh.REFRESHED)
+        processor = FakeProcessor({"https://c": video("vid")})
+        channel = self.run_with(cookies, processor)
+        self.assertEqual(self.downloaded_ids(processor), ["vid"])
+        self.assertIsNone(channel.get_last_error())
+
+    def test_the_watch_goes_to_the_sub_channels(self):
+        cookies = FakeCookies()
+        infos: dict[str, object] = {
+            "https://c": playlist("p", ["https://v/a"]),
+            "https://v/a": video("a"),
+        }
+        self.run_with(cookies, FakeProcessor(infos))
+        self.assertGreater(len(cookies.processors), 1)
+
+    def test_no_watch_no_check(self):
+        processor = FakeProcessor({"https://c": video("vid")})
+        self.assertTrue(self.run_channel(processor)[1])
+        self.assertEqual(self.warnings(), [])
 
 
 class TestChannelHelper(IsolatedTestCase):

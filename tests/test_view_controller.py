@@ -255,7 +255,7 @@ class TestRunning(ControllerTestCase):
     def test_title_bar_shows_only_the_slots(self):
         controller = self.start()
         controller.get_queue().put(InitMessage(index=0, provider=SLOT))
-        controller.get_queue().put(HeaderMessage(status="Backing off until 12:00"))
+        controller.get_queue().put(HeaderMessage(status="Suspended until 12:00"))
         blank = View.COUNTDOWN[0]
         self.assertTrue(
             wait_until(lambda: f"\x1b]2;1 ⚫ {blank}\x1b\\" in self.stdout.getvalue())

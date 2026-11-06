@@ -7,24 +7,24 @@ from .debug import Debug
 from .util import Util
 
 
-class Backoff:
-    """Decides when all slots should back off together.
+class Suspension:
+    """Decides when all slots should suspend together.
 
     A single restriction error (e.g. "Video unavailable") may just be a deleted
-    video, so a global back-off only starts when enough slots report
+    video, so a global suspension only starts when enough slots report
     restrictions within WINDOW seconds of each other.
     """
 
     WINDOW: float = (
         15 * Util.SECONDS_PER_MINUTE
     )  # Restriction reports expire after this
-    DURATION: float = 6 * Util.SECONDS_PER_HOUR  # Length of a global back-off
+    DURATION: float = 6 * Util.SECONDS_PER_HOUR  # Length of a global suspension
     WAIT_STEP: float = 1.0  # Max seconds between event checks in wait()
 
     # The wall clock is used: the monotonic clock stops while the computer
-    # sleeps (macOS), so a back-off would last longer by that time. When the
+    # sleeps (macOS), so a suspension would last longer by that time. When the
     # wall clock is set back, the stored times are moved back with it, so a
-    # back-off never lasts longer than DURATION, nor a report than WINDOW.
+    # suspension never lasts longer than DURATION, nor a report than WINDOW.
     def __init__(self, slots: int = 1, clock: Callable[[], float] = time.time) -> None:
         self.__lock = Lock()
         self.__clock = clock
@@ -43,14 +43,14 @@ class Backoff:
             return self.__threshold()
 
     def report_restriction(self, slot: int, reason: str = "") -> bool:
-        name = Backoff.__name(slot)
+        name = Suspension.__name(slot)
         with self.__lock:
             now = self.__now()
             if self.__active(now):
-                # Reports from slots finishing work during a back-off must not carry over
-                left = Backoff.__format(self.__remaining(now))
+                # Reports from slots finishing work during a suspension must not carry over
+                left = Suspension.__format(self.__remaining(now))
                 messages = [
-                    f"Backoff: {name} not recorded, backing off for {left}: {reason}"
+                    f"Suspension: {name} not recorded, suspended for {left}: {reason}"
                 ]
                 result = True
             else:
@@ -58,16 +58,19 @@ class Backoff:
                 self.__purge(now)
                 count, threshold = len(self.__restrictions), self.__threshold()
                 messages = [
-                    f"Backoff: {name} restricted ({count}/{threshold}): {reason}"
+                    f"Suspension: {name} restricted ({count}/{threshold}): {reason}"
                 ]
                 result = count >= threshold
                 if result:
-                    self.__until = now + Backoff.DURATION
-                    # Restrictions after the back-off count from zero
+                    self.__until = now + Suspension.DURATION
+                    # Restrictions after the suspension count from zero
                     self.__restrictions.clear()
-                    slots, duration = self.__slots, Backoff.__format(Backoff.DURATION)
+                    slots, duration = (
+                        self.__slots,
+                        Suspension.__format(Suspension.DURATION),
+                    )
                     messages.append(
-                        f"Backoff: triggered by {count} of {slots} slots for {duration}"
+                        f"Suspension: triggered by {count} of {slots} slots for {duration}"
                     )
         for message in messages:
             Debug.print(-1, message)
@@ -95,8 +98,8 @@ class Backoff:
             self.__purge(self.__now())
             return len(self.__restrictions)
 
-    # Blocks while a back-off is active. Returns True as soon as any of the
-    # events is set, False when the back-off is over (or was not active)
+    # Blocks while a suspension is active. Returns True as soon as any of the
+    # events is set, False when the suspension is over (or was not active)
     def wait(self, *events: Event) -> bool:
         waiter = events[0] if events else self.__never
         while True:
@@ -105,7 +108,7 @@ class Backoff:
             remaining = self.remaining()
             if remaining <= 0:
                 return False
-            if waiter.wait(min(Backoff.WAIT_STEP, remaining)):
+            if waiter.wait(min(Suspension.WAIT_STEP, remaining)):
                 return True
 
     def __threshold(self) -> int:
@@ -138,7 +141,7 @@ class Backoff:
         expired = [
             slot
             for slot, reported in self.__restrictions.items()
-            if now - reported >= Backoff.WINDOW
+            if now - reported >= Suspension.WINDOW
         ]
         for slot in expired:
             del self.__restrictions[slot]

@@ -10,7 +10,9 @@ with one panel per slot.
 
 - Python 3.10 or newer
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- [FFmpeg](https://ffmpeg.org/), used by yt-dlp to merge video and audio
+- [FFmpeg](https://ffmpeg.org/), used by yt-dlp to merge video and audio and to embed subtitles
+- [mutagen](https://mutagen.readthedocs.io/), used to write mp4 tags and the cover (installed with
+  ViDL)
 - macOS or Linux, and a terminal with true color support
 - Optional: a [Nerd Font](https://www.nerdfonts.com/) for panel decorations
 
@@ -61,17 +63,17 @@ running, so changes made to it by hand are lost.
 The header shows the time and uptime, free space on the download and temporary directories (a
 single entry when both are on the same disk, colored below 10% and 2% free), the network status,
 and the yt-dlp version with available updates. When the terminal is narrow, the yt-dlp version is
-left out first, then the network status. A pending quit (`c`) or a back-off is shown below the
+left out first, then the network status. A pending quit (`c`) or a suspension is shown below the
 title, and the key hints, prompt or the result of a command on the last line.
 
-### Errors and back-off
+### Errors and suspension
 
 Errors are shown in a short form in the panels and in the channels file, e.g.
 `abc123: Private video` or `Rate limited`. The full yt-dlp message is written to the debug log.
 
 Some errors indicate a temporary block by the site: bot checks, rate limits and
-`Video unavailable`. As a single `Video unavailable` may also just be a deleted video, all slots back
-off for 6 hours only when enough slots report such errors within 15 minutes of each other: one
+`Video unavailable`. As a single `Video unavailable` may also just be a deleted video, all slots are
+suspended for 6 hours only when enough slots report such errors within 15 minutes of each other: one
 slot when only one is running, otherwise at least half of them and never fewer than two (2 slots:
 both, 3 or 4 slots: 2, 5 or 6 slots: 3). Downloads that are running complete first. Below the
 threshold, the slot pauses for 5 seconds and continues with the next video.
@@ -103,8 +105,10 @@ https://www.youtube.com/@anotherchannel
 - The dates are Unix timestamps, maintained by ViDL.
 - The file is rewritten while running, keeping its permissions.
 
-Channels are processed in order of their last download, or their last attempt if they have never
-been downloaded.
+Channels are processed in order of their last attempt, the one tried longest ago first and channels
+that were never tried before the rest. A channel that fails is thereby tried again after all the
+others. A channel whose attempt was cut short by quitting (`q`, or `c` while waiting) keeps its
+place.
 
 ## Configuration
 
@@ -151,11 +155,53 @@ on exit.
 | `resolution_defer`   | `0`     | Days. Newer videos are postponed to give higher resolutions time to become available, unless the video is already available above 2000 pixels in height. `0` disables |
 | `sleep_interval`     | `120`   | Seconds. Minimum pause after each download |
 | `post_sleep_cutoff`  | `60`    | Minutes. The pause after a download lasts as long as the download did, but never longer than this |
-| `metadata`           | `True`  | Write metadata to new downloads: title, date, description, the channel as show, and the episode number, counted from the oldest video of the playlist or channel tab |
+| `metadata`           | `True`  | Write metadata to new downloads, see below |
 | `thumbnail`          | `"channel"` | Cover image embedded in new downloads: `"channel"` for the channel avatar (the video thumbnail when there is none), `"video"` for the video thumbnail, `None` for none |
+| `maximum_size`       | `0`     | GB. A video larger than this is recorded in the archive and skipped, as is done with vertical videos. `0` disables. Videos of unknown size are never skipped |
+| `exclusive_size`     | `10`    | GB. A download of at least this size runs alone: the downloads running in other slots finish first, and no others start until it is done. `0` disables |
 
-Metadata and cover images are only written to files downloaded in the same run. Files that already
-exist are never changed.
+Metadata, cover images and subtitles are only written to files downloaded in the same run. Files
+that already exist are never changed.
+
+Subtitles (all languages, but not the live chat) are embedded in the video as WebVTT converted by
+ffmpeg to `mov_text`, the subtitle format of mp4, and the separate subtitle files are removed.
+Styling and positioning of the cues is lost in that format.
+
+`metadata` writes these mp4 tags: title (`©nam`), the channel as artist, album artist, album and show
+(`©ART`, `aART`, `©alb`, `tvsh`), `stik` 10 (TV show), the resolution class (`hdvd`: 0 below 720,
+1 for 720, 2 for 1080, 3 for 2160 and up), the publication date as `YYYY-MM-DD` (`©day`), genre,
+episode number counted from the oldest video of the playlist or channel tab (`tves`), the video id
+(`tven`), season 1 unless yt-dlp provides one (`tvsn`), the extractor (`tvnn`), the description cut to
+255 characters (`desc`) and in full (`ldes`), the channel description (`sdes`), hashtags of the title
+and description (`keyw`), explicit (`rtng`) for videos with an age limit of 18, and the playlist or
+channel tab, such as Shorts and Live, as grouping (`©grp`). The comment and all encoder tags are
+left empty. The video URL, the channel URL and id, and the upload time as ISO timestamp are
+kept in the freeform tags `VIDEO_URL`, `CHANNEL_URL`, `CHANNEL_ID` and `UPLOAD_TIMESTAMP`.
+
+### Large downloads, disk space and HLS
+
+Just before a download starts, when yt-dlp has chosen the formats, ViDL checks:
+
+- On YouTube, a download that would use HLS (m3u8) is refused, the quality is poor. The video is not
+  recorded in the archive and is tried again later.
+- The size against `maximum_size`.
+- That the temporary directory can hold the download and the work on it: about twice the size,
+  plus 5% and 256 MB, as the parts and the merged file exist together, and the metadata step makes
+  a copy of the file. The download directory needs the size once, unless it is on the same disk.
+  Space reserved by downloads that are running is counted. When there is not enough space, the
+  download waits for the running ones to finish and fails with `No space in temp` when nothing is
+  running. When the size is not known, 1 GB free is required.
+- A large download (`exclusive_size`) waits for the running downloads and then runs alone.
+
+Files written for a refused video, such as subtitles, are removed from the temporary directory.
+
+### Cookies
+
+When yt-dlp notices that YouTube rotated the cookies of a logged in session, it only warns. ViDL
+then reloads the current cookies from `General.cookie_browser` into the running download (at most
+once per 5 minutes) and tells so in the panel. If the browser has the same cookies, they have
+expired there as well, and you have to log in again. The debug log shows a short hash of the
+session cookies when they were loaded and at the end, never their values.
 
 ### `[Debug]`
 

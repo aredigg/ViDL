@@ -188,6 +188,10 @@ class Item:
         )
 
     @staticmethod
+    def is_hls(format: Mapping[str, object]) -> bool:
+        return Item.get_str(format, "protocol").lower().startswith("m3u8")
+
+    @staticmethod
     def no_vertical(info: dict[str, object]) -> bool:
         width = Item.get_int(info, "width")
         height = Item.get_int(info, "height")
@@ -254,12 +258,15 @@ class Item:
         for format in formats_pre:
             formats.append(cast(dict[str, object], format))
 
-        def key(format: dict[str, object]) -> tuple[int, int, bool, int, int]:
+        # HLS streams are of lower quality than the same resolution over
+        # https, so they only win on a higher resolution, frame rate or range
+        def key(format: dict[str, object]) -> tuple[int, int, bool, bool, int, int]:
             dynamic_range = Item.get_str(format, "dynamic_range", "SDR").upper()
             return (
                 Item.get_int(format, "height"),
                 Item.get_int(format, "fps"),
                 dynamic_range != "SDR",
+                not Item.is_hls(format),
                 Item.get_int(format, "audio_channels"),
                 Item.get_int(format, "asr"),
             )

@@ -1,4 +1,5 @@
 # pyright: standard
+import itertools
 import os
 import signal
 import threading
@@ -10,8 +11,9 @@ from typing import ClassVar, cast
 from unittest import mock
 
 from yt_dlp import YoutubeDL
+from yt_dlp.utils import DownloadError
 
-from tests.helpers import IsolatedTestCase, drain
+from tests.helpers import IsolatedTestCase, drain, wait_until
 from vidl.channel import Channel, ChannelHelper
 from vidl.command import AddChannelCommand, Command, DrainCommand, QuitCommand
 from vidl.config import Config
@@ -84,13 +86,17 @@ class FakeMonitor:
 
 
 class EmptyPlaylistProcessor:
-    """Every URL is an empty playlist, so a download succeeds at once."""
+    """Every URL is an empty playlist, so a download succeeds at once, except
+    the URLs in failing, which fail to extract."""
 
     params: ClassVar[dict[str, object]] = {}
+    failing: ClassVar[set[str]] = set()
 
     def extract_info(
         self, url: str, download: bool = False, process: bool = False
     ) -> dict[str, object]:
+        if url in EmptyPlaylistProcessor.failing:
+            raise DownloadError("ERROR: Unable to download webpage: timed out")
         return {"_type": "playlist", "id": url, "title": url, "entries": []}
 
 
@@ -145,6 +151,7 @@ class CoordinatorTestCase(IsolatedTestCase):
         FakeSlot.on_process = staticmethod(lambda count: None)
         FakeSlot.fail_on_create = False
         FakeSlot.busy_seconds = 0.0
+        EmptyPlaylistProcessor.failing = set()
         for target, fake in (
             ("vidl.coordinator.ViewController", FakeViewController),
             ("vidl.coordinator.Slot", FakeSlot),
@@ -241,8 +248,8 @@ class TestStartup(CoordinatorTestCase):
         Coordinator()
         shared = {id(s.shared) for s in FakeSlot.instances}
         self.assertEqual(len(shared), 1)
-        backoff = cast(Shared, FakeSlot.instances[0].shared).backoff
-        self.assertEqual(backoff.threshold(), 2)  # both of two slots
+        suspension = cast(Shared, FakeSlot.instances[0].shared).suspension
+        self.assertEqual(suspension.threshold(), 2)  # both of two slots
 
     def test_failed_setup_stops_the_view(self):
         self.write_channels("a")
@@ -301,6 +308,37 @@ class TestRun(CoordinatorTestCase):
             "A;https://a;100;100;",
             "B;https://b;200;200;",
         )
+
+    def test_a_failing_channel_is_not_retried_before_the_others(self):
+        # Its last download is the oldest, but it is the one that fails. The
+        # clock steps on every call, as attempts within a second tie.
+        self.write_channels(
+            "F;https://f;100;100;",
+            "A;https://a;200;200;",
+            "B;https://b;300;300;",
+        )
+        EmptyPlaylistProcessor.failing = {"https://f"}
+        self.quit_after(7)
+        clock = itertools.count(1_000_000, 10)
+        with mock.patch("vidl.channel.time", side_effect=lambda: next(clock)):
+            coordinator = Coordinator()
+            self.assertEqual(coordinator.run(), 0)
+        urls = ["https://f", "https://a", "https://b"]
+        self.assertEqual(FakeSlot.processed, urls + urls + ["https://f"])
+        rows = {
+            str(c.row()[1]): c.row() for c in ChannelHelper.load_channels(self.file)
+        }
+        self.assertEqual(rows["https://f"][2], 100)  # never downloaded again
+        self.assertIn("Network error", str(rows["https://f"][4]))
+
+    def test_never_attempted_channels_come_first(self):
+        self.write_channels(
+            "A;https://a;100;5000;",
+            "New;https://new;;;",
+        )
+        self.quit_after(1)
+        Coordinator().run()
+        self.assertEqual(FakeSlot.processed, ["https://new"])
 
     def test_channels_are_processed_oldest_first_until_quit(self):
         self.quit_after(4)
@@ -451,40 +489,88 @@ class TestDrain(CoordinatorTestCase):
         self.assertLess(time.monotonic() - started, 5)
 
 
-class TestBackoff(CoordinatorTestCase):
+class TestSuspension(CoordinatorTestCase):
     def setUp(self):
         super().setUp()
         self.write_channels("A;https://a;100;100;", "B;https://b;200;200;")
         Config.settings["Channels"]["slots"] = 2
 
-    def test_no_channels_are_started_during_a_back_off(self):
+    def test_no_channels_are_started_during_a_suspension(self):
         coordinator = Coordinator()
-        backoff = cast(Shared, FakeSlot.instances[0].shared).backoff
-        backoff.report_restriction(0)
-        backoff.report_restriction(1)
-        self.assertTrue(backoff.active())
+        suspension = cast(Shared, FakeSlot.instances[0].shared).suspension
+        suspension.report_restriction(0)
+        suspension.report_restriction(1)
+        self.assertTrue(suspension.active())
         self.quit_later(0.3)
         self.assertEqual(coordinator.run(), 0)
         self.assertEqual(FakeSlot.processed, [])
         messages = drain(self.view().queue)
         sleeps = [m for m in messages if isinstance(m, SleepMessage)]
-        # Each idle slot is shown the back-off once
+        # Each idle slot is shown the suspension once
         self.assertEqual(sorted(m.index for m in sleeps), [0, 1])
         self.assertTrue(all(m.required and m.sleep_time > 0 for m in sleeps))
         headers = [m for m in messages if isinstance(m, HeaderMessage)]
-        self.assertTrue(headers[0].status.startswith("Backing off until"))
+        self.assertTrue(headers[0].status.startswith("Suspended until"))
 
-    def test_channels_start_again_when_the_back_off_ends(self):
+    def test_channels_start_again_when_the_suspension_ends(self):
         coordinator = Coordinator()
-        backoff = cast(Shared, FakeSlot.instances[0].shared).backoff
-        backoff.report_restriction(0)
-        backoff.report_restriction(1)
+        suspension = cast(Shared, FakeSlot.instances[0].shared).suspension
+        suspension.report_restriction(0)
+        suspension.report_restriction(1)
         self.quit_after(1)
         with mock.patch.object(
-            backoff, "active", side_effect=[True, True, False] + [False] * 100
+            suspension, "active", side_effect=[True, True, False] + [False] * 100
         ):
             self.assertEqual(coordinator.run(), 0)
         self.assertEqual(FakeSlot.processed, ["https://a"])
+
+
+class TestLargeDownload(CoordinatorTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write_channels("A;https://a;100;100;", "B;https://b;200;200;")
+        Config.settings["Channels"]["slots"] = 2
+
+    def statuses(self) -> list[str]:
+        return [m.status for m in self.messages(HeaderMessage)]
+
+    def test_the_header_names_the_slot_running_alone(self):
+        coordinator = Coordinator()
+        gate = cast(Shared, FakeSlot.instances[0].shared).gate
+        gate.acquire_exclusive(1, threading.Event(), threading.Event())
+        self.addCleanup(gate.release, 1)
+        self.quit_later(0.3)
+        self.assertEqual(coordinator.run(), 0)
+        self.assertIn("Large download in slot 2, others wait", self.statuses())
+
+    def test_the_header_names_the_slot_waiting_for_the_others(self):
+        coordinator = Coordinator()
+        gate = cast(Shared, FakeSlot.instances[0].shared).gate
+        gate.acquire_shared(0, threading.Event(), threading.Event())
+        self.addCleanup(gate.release, 0)
+        waiter = threading.Thread(
+            target=lambda: gate.acquire_exclusive(
+                1, threading.Event(), threading.Event()
+            )
+        )
+        waiter.start()
+        self.addCleanup(waiter.join, 5)
+        self.addCleanup(gate.release, 1)
+        self.addCleanup(gate.release, 0)
+        self.assertTrue(wait_until(lambda: gate.status().waiting_exclusive == 1))
+        self.quit_later(0.3)
+        self.assertEqual(coordinator.run(), 0)
+        (text,) = {s for s in self.statuses() if s}
+        self.assertEqual(
+            text,
+            "Slot 2 waits for the running downloads to finish before a large download",
+        )
+
+    def test_no_status_without_a_large_download(self):
+        coordinator = Coordinator()
+        self.quit_later(0.2)
+        coordinator.run()
+        self.assertEqual([s for s in self.statuses() if s], [])
 
 
 class TestAddChannel(CoordinatorTestCase):
@@ -560,8 +646,8 @@ class TestAddChannel(CoordinatorTestCase):
         Config.settings["Channels"]["slots"] = 2
         self.run_with(AddChannelCommand("https://example.com/new"))
         self.assertEqual([s.index for s in FakeSlot.instances], [0, 1])
-        backoff = cast(Shared, FakeSlot.instances[0].shared).backoff
-        self.assertEqual(backoff.threshold(), 2)
+        suspension = cast(Shared, FakeSlot.instances[0].shared).suspension
+        self.assertEqual(suspension.threshold(), 2)
         self.assertIs(FakeSlot.instances[1].shared, FakeSlot.instances[0].shared)
 
     def test_no_extra_slot_beyond_the_configured_number(self):

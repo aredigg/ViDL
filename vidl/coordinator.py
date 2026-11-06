@@ -6,7 +6,6 @@ from types import FrameType
 from typing import cast
 from urllib.parse import urlsplit
 
-from .backoff import Backoff
 from .channel import Channel, ChannelHelper
 from .command import AddChannelCommand, Command, DrainCommand, QuitCommand
 from .config import Config
@@ -22,6 +21,7 @@ from .message import (
 from .monitor import Monitor, SystemStatus
 from .shared import Shared
 from .slot import Slot
+from .suspension import Suspension
 from .util import Util
 from .view_controller import ViewController
 
@@ -39,8 +39,8 @@ class Coordinator:
         self.__error: object = None
         self.__shared = Shared()
         self.__monitor: Monitor | None = None
-        # Idle slots already shown the current back-off
-        self.__backoff_shown: set[int] = set()
+        # Idle slots already shown the current suspension
+        self.__suspension_shown: set[int] = set()
         self.__header = ""
         self.__view = ViewController()
         self.__view_queue = self.__view.get_queue()
@@ -57,7 +57,7 @@ class Coordinator:
             number_of_slots = min(self.__slot_limit(), len(self.__channels))
             monitor = self.__monitor = self.__create_monitor()
             self.__shared = Shared(
-                backoff=Backoff(slots=number_of_slots),
+                suspension=Suspension(slots=number_of_slots),
                 network_error=monitor.report_network_error,
                 network_success=monitor.report_network_success,
             )
@@ -114,7 +114,7 @@ class Coordinator:
             while self.__running:
                 try:
                     channel = None
-                    if not self.__draining and not self.__backoff_active():
+                    if not self.__draining and not self.__suspension_active():
                         channel = self.__next_channel()
                     slot = next((slot for slot in self.__slots if slot.ready()), None)
                     if channel is not None and slot is not None:
@@ -161,26 +161,26 @@ class Coordinator:
     def __busy_slots(self) -> int:
         return sum(1 for slot in self.__slots if slot.busy())
 
-    # No channels are started during a global back-off, and idle slots show it
-    def __backoff_active(self) -> bool:
-        backoff = self.__shared.backoff
-        if not backoff.active():
-            self.__backoff_shown.clear()
+    # No channels are started during a global suspension, and idle slots show it
+    def __suspension_active(self) -> bool:
+        suspension = self.__shared.suspension
+        if not suspension.active():
+            self.__suspension_shown.clear()
             return False
         for index, slot in enumerate(self.__slots):
-            if index not in self.__backoff_shown and slot.ready():
-                self.__backoff_shown.add(index)
+            if index not in self.__suspension_shown and slot.ready():
+                self.__suspension_shown.add(index)
                 self.__view_queue.put(
                     SleepMessage(
                         index=index,
                         provider=Message.Provider.CHANNEL,
-                        sleep_time=backoff.remaining(),
+                        sleep_time=suspension.remaining(),
                         required=True,
                     )
                 )
         return True
 
-    # The lasting states shown in the header: a pending quit and a back-off
+    # The lasting states shown in the header: a pending quit and a suspension
     def __update_header(self) -> None:
         status: list[str] = []
         if self.__draining:
@@ -189,10 +189,18 @@ class Coordinator:
                 f"Finishing {busy} download{'s' if busy != 1 else ''}, "
                 + "c to continue, q to quit now"
             )
-        backoff = self.__shared.backoff
-        if backoff.active():
-            until = Util.get_time(int(time() + backoff.remaining()))
-            status.append(f"Backing off until {until}, too many restricted slots")
+        suspension = self.__shared.suspension
+        if suspension.active():
+            until = Util.get_time(int(time() + suspension.remaining()))
+            status.append(f"Suspended until {until}, too many restricted slots")
+        gate = self.__shared.gate.status()
+        if gate.exclusive is not None:
+            status.append(f"Large download in slot {gate.exclusive + 1}, others wait")
+        elif gate.waiting_exclusive is not None:
+            status.append(
+                f"Slot {gate.waiting_exclusive + 1} waits for the running downloads "
+                + "to finish before a large download"
+            )
         header = " · ".join(status)
         if header != self.__header:
             self.__header = header
@@ -201,7 +209,7 @@ class Coordinator:
     def __next_channel(self):
         return min(
             (channel for channel in self.__channels if not channel.active()),
-            key=lambda channel: channel.get_last_date(),
+            key=lambda channel: channel.queue_key(),
             default=None,
         )
 
@@ -264,7 +272,7 @@ class Coordinator:
             self.__slots.append(
                 Slot(len(self.__slots), self.__view_queue, self.__shared)
             )
-            self.__shared.backoff.set_slots(len(self.__slots))
+            self.__shared.suspension.set_slots(len(self.__slots))
         self.__notice(f"Added {text}")
 
     def __notice(self, text: str, error: bool = False) -> None:

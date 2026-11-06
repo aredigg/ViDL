@@ -10,14 +10,18 @@ from yt_dlp import YoutubeDL
 from tests.helpers import IsolatedTestCase, drain, private, wait_until
 from vidl.channel import Channel
 from vidl.config import Config
+from vidl.cookies import CookieWatch
 from vidl.hook import DownloadCancelled
 from vidl.logger import Logger
-from vidl.message import ErrorMessage, InitMessage, Message
+from vidl.message import ErrorMessage, InfoMessage, InitMessage, Message
 from vidl.metadata import (
     MetadataPostProcessor,
+    NewFileAtomPP,
+    NewFileEmbedSubtitlePP,
     NewFileEmbedThumbnailPP,
     NewFileMetadataPP,
 )
+from vidl.preflight import GIB, Preflight
 from vidl.shared import Shared
 from vidl.slot import Slot
 
@@ -196,35 +200,66 @@ class TestSlot(IsolatedTestCase):
         self.stop()
         self.assertFalse(self.slot.busy())  # a stopped slot is never busy
 
-    def test_metadata_post_processors(self):
+    def test_post_processors_and_their_order(self):
         channel = FakeChannel("a")
         self.process(channel)
         processor = FakeYoutubeDL.instances[0]
         kinds = [(type(pp), when) for pp, when in processor.post_processors]
+        # Embedding subtitles remuxes the file, so it comes before the tags, and
+        # the thumbnail is embedded last
         self.assertEqual(
             kinds,
             [
                 (MetadataPostProcessor, "video"),
+                (Preflight, "before_dl"),
+                (NewFileEmbedSubtitlePP, "post_process"),
                 (NewFileMetadataPP, "post_process"),
+                (NewFileAtomPP, "post_process"),
                 (NewFileEmbedThumbnailPP, "post_process"),
             ],
         )
         self.assertTrue(processor.settings["writethumbnail"])
         metadata_pp = processor.post_processors[0][0]
         self.assertIs(private(channel, Channel, "metadata_pp"), metadata_pp)
+        preflight = processor.post_processors[1][0]
+        self.assertIs(private(channel, Channel, "preflight"), preflight)
 
     def test_post_processors_follow_the_options(self):
+        subtitles = NewFileEmbedSubtitlePP
         cases = (
-            (False, "channel", [MetadataPostProcessor, NewFileEmbedThumbnailPP], True),
+            (
+                False,
+                "channel",
+                [MetadataPostProcessor, Preflight, subtitles, NewFileEmbedThumbnailPP],
+                True,
+            ),
             (
                 True,
                 "video",
-                [MetadataPostProcessor, NewFileMetadataPP, NewFileEmbedThumbnailPP],
+                [
+                    MetadataPostProcessor,
+                    Preflight,
+                    subtitles,
+                    NewFileMetadataPP,
+                    NewFileAtomPP,
+                    NewFileEmbedThumbnailPP,
+                ],
                 True,
             ),
-            (False, "video", [NewFileEmbedThumbnailPP], True),
-            (True, None, [MetadataPostProcessor, NewFileMetadataPP], False),
-            (False, None, [], False),
+            (False, "video", [Preflight, subtitles, NewFileEmbedThumbnailPP], True),
+            (
+                True,
+                None,
+                [
+                    MetadataPostProcessor,
+                    Preflight,
+                    subtitles,
+                    NewFileMetadataPP,
+                    NewFileAtomPP,
+                ],
+                False,
+            ),
+            (False, None, [Preflight, subtitles], False),
         )
         for metadata, thumbnail, expected, writethumbnail in cases:
             with self.subTest(metadata=metadata, thumbnail=thumbnail):
@@ -240,6 +275,87 @@ class TestSlot(IsolatedTestCase):
                 self.assertEqual(
                     processor.settings.get("writethumbnail", False), writethumbnail
                 )
+
+    def test_subtitles_are_only_embedded_when_written(self):
+        Config.ydl_settings["writesubtitles"] = False
+        self.process(FakeChannel("a"))
+        kinds = [type(pp) for pp, _ in FakeYoutubeDL.instances[0].post_processors]
+        self.assertNotIn(NewFileEmbedSubtitlePP, kinds)
+
+    def test_subtitle_settings_are_embeddable(self):
+        self.process(FakeChannel("a"))
+        settings = FakeYoutubeDL.instances[0].settings
+        self.assertIn("-live_chat", settings["subtitleslangs"])
+        self.assertTrue(settings["subtitlesformat"].startswith("vtt"))
+
+    def preflight(self, **options: object) -> Preflight:
+        Config.settings["Download"].update(options)
+        self.process(FakeChannel("a"))
+        (preflight,) = [
+            pp
+            for pp, _ in FakeYoutubeDL.instances[-1].post_processors
+            if isinstance(pp, Preflight)
+        ]
+        return preflight
+
+    def test_preflight_gets_the_shared_state_and_limits(self):
+        Config.settings["Paths"].update(output="/out", temporary="/tmp/vidl")
+        preflight = self.preflight(maximum_size=2, exclusive_size=0.5)
+        self.assertIs(private(preflight, Preflight, "gate"), self.shared.gate)
+        self.assertIs(private(preflight, Preflight, "ledger"), self.shared.ledger)
+        self.assertIs(private(preflight, Preflight, "drain"), self.shared.drain_event)
+        self.assertEqual(private(preflight, Preflight, "maximum_size"), 2 * GIB)
+        self.assertEqual(private(preflight, Preflight, "exclusive_size"), GIB // 2)
+        self.assertEqual(private(preflight, Preflight, "temp_dir"), "/tmp/vidl")
+        self.assertEqual(private(preflight, Preflight, "output_dir"), "/out")
+
+    def test_preflight_limits_off(self):
+        for value in (0, None, True, "10", -3):
+            with self.subTest(value=value):
+                preflight = self.preflight(maximum_size=value, exclusive_size=value)
+                self.assertEqual(private(preflight, Preflight, "maximum_size"), 0)
+                self.assertEqual(private(preflight, Preflight, "exclusive_size"), 0)
+
+    def test_a_cookie_watch_is_made_for_the_browser(self):
+        Config.settings["General"]["cookie_browser"] = "firefox"
+        channel = FakeChannel("a")
+        self.process(channel)
+        watch = private(channel, Channel, "cookies")
+        self.assertIsInstance(watch, CookieWatch)
+        self.assertEqual(private(watch, CookieWatch, "browser"), "firefox")
+
+    def test_no_browser_no_cookie_watch(self):
+        Config.settings["General"]["cookie_browser"] = None
+        channel = FakeChannel("a")
+        self.process(channel)
+        self.assertIsNone(private(channel, Channel, "cookies"))
+
+    def test_a_rotation_warning_reaches_the_watch(self):
+        Config.settings["General"]["cookie_browser"] = "firefox"
+        channel = FakeChannel("a")
+        self.process(channel)
+        watch = private(channel, Channel, "cookies")
+        logger = FakeYoutubeDL.instances[0].settings["logger"]
+        self.assertFalse(watch.rotated())
+        with (
+            mock.patch("vidl.logger.Debug.print"),
+            mock.patch("vidl.cookies.Debug.print"),
+        ):
+            logger.warning("WARNING: [youtube] Something else")
+            self.assertFalse(watch.rotated())
+            logger.warning(
+                "WARNING: [youtube] The provided YouTube account cookies are no "
+                "longer valid. They have likely been rotated in the browser"
+            )
+        self.assertTrue(watch.rotated())
+
+    def test_waiting_is_shown_in_the_panel(self):
+        drain(self.queue)
+        preflight = self.preflight()
+        private(preflight, Preflight, "notify")("Waiting for disk space")
+        (message,) = [m for m in drain(self.queue) if isinstance(m, InfoMessage)]
+        self.assertEqual(message.index, 2)
+        self.assertEqual(message.message, "Waiting for disk space")
 
 
 if __name__ == "__main__":

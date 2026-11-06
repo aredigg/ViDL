@@ -1,5 +1,6 @@
 # A singleton class for accessing and reading/writing configuration data
 
+import math
 import os
 import sys
 from typing import ClassVar
@@ -38,6 +39,8 @@ class Config:
             "post_sleep_cutoff": 60,
             "metadata": True,
             "thumbnail": "channel",
+            "maximum_size": 0,
+            "exclusive_size": 10,
         },
         "Debug": {
             "file_name": "debug",
@@ -63,13 +66,16 @@ class Config:
         "merge_output_format": "mp4",
         "writesubtitles": True,
         "writeautomaticsub": False,
-        "subtitleslangs": ["all"],
+        # Live chat is json and cannot be embedded. WebVTT is the format ffmpeg
+        # converts to mov_text for mp4, the others (ttml, srv, json3) it cannot
+        "subtitleslangs": ["all", "-live_chat"],
+        "subtitlesformat": "vtt/srt/best",
         "writedescription": False,
         "writeinfojson": False,
         "hls_prefer_native": True,
-        #        "extractor-args": {
-        #            "youtube": {"player_client": ["default", "web_embedded", "-tv_downgraded"]},
-        #        },
+        # Extractor arguments are "extractor_args" (underscore), with lists as
+        # values, e.g. {"youtube": {"skip": ["hls"]}}, the hyphenated name is only
+        # the command line option and is ignored by yt-dlp
         "external_downloader_args": {
             "ffmpeg": ["-loglevel", "quiet", "-hide_banner", "-nostats"]
         },
@@ -179,6 +185,19 @@ class Config:
         if not isinstance(download.get("metadata"), bool):
             print("ERROR: Download.metadata must be True or False", file=sys.stderr)
             result = False
+        for key in ("maximum_size", "exclusive_size"):
+            value = download.get(key)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                print(
+                    f"ERROR: Download.{key} must be a non-negative number of GB",
+                    file=sys.stderr,
+                )
+                result = False
         if download.get("thumbnail") not in Config.THUMBNAIL_OPTIONS:
             print(
                 'ERROR: Download.thumbnail must be "channel", "video" or None',

@@ -19,6 +19,8 @@ class Hook:
         NORMALIZE = "FixupM3u8"
         METADATA = "Metadata"
         THUMBNAIL = "EmbedThumbnail"
+        SUBTITLES = "EmbedSubtitle"
+        ATOMS = "Atoms"
 
         @staticmethod
         def process(state: str) -> str:
@@ -29,6 +31,8 @@ class Hook:
                 Hook.State.NORMALIZE.value: "Normalize",
                 Hook.State.METADATA.value: "Metadata",
                 Hook.State.THUMBNAIL.value: "Thumbnail",
+                Hook.State.SUBTITLES.value: "Subtitles",
+                Hook.State.ATOMS.value: "Tags",
             }
             return processes.get(state) or state
 

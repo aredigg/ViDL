@@ -5,9 +5,15 @@ from .error import Error
 
 
 class Logger:
-    def __init__(self, slot_index: int, report_error: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        slot_index: int,
+        report_error: Callable[[str], None],
+        on_cookie_rotation: Callable[[], None] | None = None,
+    ) -> None:
         self.__slot_index = slot_index
         self.__report_error = report_error
+        self.__on_cookie_rotation = on_cookie_rotation
 
     def debug(self, message: str):
         self.__print("DBG", message, message)
@@ -16,6 +22,8 @@ class Logger:
         self.__print("INF", Error.strip_level(message), message)
 
     def warning(self, message: str):
+        if self.__on_cookie_rotation is not None and Error.is_cookie_rotation(message):
+            self.__on_cookie_rotation()
         self.__print("WRN", Error.strip_level(message), message)
 
     def error(self, message: str):

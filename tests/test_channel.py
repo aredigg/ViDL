@@ -1001,6 +1001,9 @@ class FakeMetadataPP:
 
 
 AVATAR = "https://yt3.example/avatar=s0"
+CHANNEL = "UC" + "x" * 22
+UPLOADS_PLAYLIST = "UU" + "x" * 22
+UPLOADS_URL = f"https://www.youtube.com/playlist?list={UPLOADS_PLAYLIST}"
 
 
 class TestMetadata(ChannelTestCase):
@@ -1024,42 +1027,216 @@ class TestMetadata(ChannelTestCase):
 
     def channel_info(self, urls: list[str]) -> dict[str, object]:
         return playlist(
-            "p",
+            CHANNEL,
             urls,
+            extractor_key="YoutubeTab",
+            channel_id=CHANNEL,
             channel="Chan",
             thumbnails=[{"id": "avatar_uncropped", "url": AVATAR}],
         )
 
-    def test_episodes_count_from_the_oldest_entry(self):
-        urls = [f"https://v/{v}" for v in "abc"]
+    def uploads(self, *ids: str) -> dict[str, object]:
+        """The uploads of the channel, newest first, as the infos of the
+        processor: the address is listed in the infos."""
+        urls = [f"https://v/{i}" for i in ids]
+        info = playlist(
+            UPLOADS_PLAYLIST,
+            urls,
+            extractor_key="YoutubeTab",
+            playlist_count=len(urls),
+        )
+        return {UPLOADS_URL: info}
+
+    def episodes(self) -> dict[str, int | None]:
+        return {
+            k: cast(MetadataContext, v).episode_number for k, v in self.seen.items()
+        }
+
+    def test_the_first_video_is_episode_1_and_the_next_2(self):
+        urls = [f"https://v/{v}" for v in "abc"]  # newest first, as listed
         infos: dict[str, object] = {"https://c": self.channel_info(urls)}
         infos.update({url: video(url[-1]) for url in urls})
+        infos.update(self.uploads("a", "b", "c"))
         self.download(infos)
-        self.assertEqual(
-            {k: v.episode_number for k, v in self.seen.items() if v},
-            {"a": 3, "b": 2, "c": 1},
-        )
+        self.assertEqual(self.episodes(), {"a": 3, "b": 2, "c": 1})
         context = cast(MetadataContext, self.seen["a"])
         self.assertEqual((context.series, context.thumbnail_url), ("Chan", AVATAR))
+        self.assertEqual(context.episode_order, "uploads")
         # The context is cleared after each download
         self.assertIsNone(self.pp.contexts[-1])
 
-    def test_nested_playlists_number_within_their_tab(self):
+    def test_all_the_tabs_of_a_channel_are_one_sequence(self):
+        # The order of publication over videos, shorts and streams together,
+        # not the position within a tab
         infos: dict[str, object] = {
             "https://c": self.channel_info(["https://c/videos", "https://c/shorts"]),
-            "https://c/videos": playlist("videos", ["https://v/va", "https://v/vb"]),
-            "https://c/shorts": playlist("shorts", ["https://v/sa"]),
+            "https://c/videos": playlist(CHANNEL, ["https://v/va", "https://v/vb"]),
+            "https://c/shorts": playlist(CHANNEL, ["https://v/sa", "https://v/sb"]),
             "https://v/va": video("va"),
             "https://v/vb": video("vb"),
             "https://v/sa": video("sa"),
+            "https://v/sb": video("sb"),
         }
+        infos.update(self.uploads("sa", "va", "sb", "vb"))
         self.download(infos)
-        episodes = {
-            k: cast(MetadataContext, v).episode_number for k, v in self.seen.items()
-        }
-        self.assertEqual(episodes, {"va": 2, "vb": 1, "sa": 1})
+        self.assertEqual(self.episodes(), {"sa": 4, "va": 3, "sb": 2, "vb": 1})
         self.assertTrue(
             all(cast(MetadataContext, v).series == "Chan" for v in self.seen.values())
+        )
+
+    def test_a_tab_on_its_own_is_numbered_by_the_uploads_too(self):
+        infos: dict[str, object] = {
+            "https://c/shorts": playlist(
+                CHANNEL,
+                ["https://v/s2", "https://v/s1"],
+                extractor_key="YoutubeTab",
+                channel_id=CHANNEL,
+            ),
+            "https://v/s2": video("s2"),
+            "https://v/s1": video("s1"),
+        }
+        infos.update(self.uploads("s2", "v1", "s1"))
+        self.download(infos, url="https://c/shorts")
+        self.assertEqual(self.episodes(), {"s2": 3, "s1": 1})
+
+    def test_a_playlist_is_numbered_in_its_own_order(self):
+        urls = [f"https://v/{v}" for v in "abc"]
+        infos: dict[str, object] = {
+            "https://p": playlist("PLabc123", urls, extractor_key="YoutubeTab"),
+            **{url: video(url[-1]) for url in urls},
+        }
+        self.download(infos, url="https://p")
+        self.assertEqual(self.episodes(), {"a": 1, "b": 2, "c": 3})
+        self.assertEqual(
+            cast(MetadataContext, self.seen["a"]).episode_order, "playlist"
+        )
+        self.assertNotIn(UPLOADS_URL, infos)  # nothing else was asked for
+
+    def test_other_sites_have_no_episodes(self):
+        urls = ["https://v/a", "https://v/b"]
+        infos: dict[str, object] = {
+            "https://c": playlist("pl", urls, extractor_key="Vimeo"),
+            "https://v/a": video("a"),
+            "https://v/b": video("b"),
+        }
+        self.download(infos)
+        self.assertEqual(self.episodes(), {"a": None, "b": None})
+
+    def test_the_uploads_are_only_listed_when_there_is_a_download(self):
+        # Every video is rejected (vertical), so nothing is downloaded
+        urls = ["https://v/a", "https://v/b"]
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(urls),
+            "https://v/a": video("a", width=1080, height=1920),
+            "https://v/b": video("b", width=1080, height=1920),
+            **self.uploads("a", "b"),
+        }
+        processor = self.download(infos)
+        self.assertEqual(processor.downloaded, [])
+        self.assertNotIn(UPLOADS_URL, processor.extracted)
+
+    def test_the_uploads_are_listed_once_for_all_videos(self):
+        urls = [f"https://v/{v}" for v in "abc"]
+        infos: dict[str, object] = {"https://c": self.channel_info(urls)}
+        infos.update({url: video(url[-1]) for url in urls})
+        infos.update(self.uploads("a", "b", "c"))
+        processor = self.download(infos)
+        self.assertEqual(processor.extracted.count(UPLOADS_URL), 1)
+
+    def test_the_uploads_are_listed_again_on_the_next_run(self):
+        # A video was published meanwhile: the numbers of the old ones stay
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(["https://v/a", "https://v/b"]),
+            "https://v/a": video("a"),
+            "https://v/b": video("b"),
+            **self.uploads("a", "b"),
+        }
+        processor = FakeProcessor(infos)
+        processor.on_download = lambda url: self.seen.__setitem__(
+            url.rsplit("/", 1)[1], self.pp.current()
+        )
+        channel = Channel("https://c", None, None, None, None)
+        channel.set_halt_event(self.halt)
+        channel.set_metadata_processor(cast(MetadataPostProcessor, self.pp))
+        channel.set_active()
+        channel.download(0, processor.processor, self.queue)
+        self.assertEqual(self.episodes(), {"a": 2, "b": 1})
+        processor.infos["https://c"] = self.channel_info(
+            ["https://v/n", "https://v/a", "https://v/b"]
+        )
+        processor.infos["https://v/n"] = video("n")
+        processor.infos.update(self.uploads("n", "a", "b"))
+        self.seen.clear()
+        channel.set_active()
+        channel.download(0, processor.processor, self.queue)
+        self.assertEqual(self.episodes(), {"n": 3, "a": 2, "b": 1})
+        self.assertEqual(processor.extracted.count(UPLOADS_URL), 2)
+
+    def test_a_list_that_cannot_be_loaded_gives_no_number(self):
+        urls = ["https://v/a", "https://v/b"]
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(urls),
+            "https://v/a": video("a"),
+            "https://v/b": video("b"),
+            UPLOADS_URL: download_error(ExtractorError("boom", expected=True)),
+        }
+        processor = self.download(infos)
+        # The videos are downloaded, with no number rather than a wrong one
+        self.assertEqual(self.downloaded_ids(processor), ["a", "b"])
+        self.assertEqual(self.episodes(), {"a": None, "b": None})
+        self.assertEqual(processor.extracted.count(UPLOADS_URL), 1)  # not again
+
+    def test_an_interrupted_list_gives_no_number(self):
+        urls = ["https://v/a", "https://v/b"]
+        info = self.uploads("a", "b")
+        cast("dict[str, Any]", info[UPLOADS_URL])["playlist_count"] = 5
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(urls),
+            "https://v/a": video("a"),
+            "https://v/b": video("b"),
+            **info,
+        }
+        processor = self.download(infos)
+        self.assertEqual(self.downloaded_ids(processor), ["a", "b"])
+        self.assertEqual(self.episodes(), {"a": None, "b": None})
+
+    def test_a_video_that_is_not_in_the_list_has_no_number(self):
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(["https://v/a"]),
+            "https://v/a": video("a"),
+            **self.uploads("other"),
+        }
+        self.download(infos)
+        self.assertEqual(self.episodes(), {"a": None})
+
+    def test_the_panel_shows_the_episode_before_the_download(self):
+        urls = ["https://v/a", "https://v/b"]
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(urls),
+            "https://v/a": video("a"),
+            "https://v/b": video("b"),
+            **self.uploads("a", "b"),
+        }
+        self.download(infos)
+        shown = {
+            m.entity.id: m.entity.episode
+            for m in self.messages(EntityMessage)
+            if m.entity.episode
+        }
+        self.assertEqual(shown, {"a": 2, "b": 1})
+
+    def test_no_episodes_without_metadata(self):
+        Config.settings["Download"]["metadata"] = False
+        urls = ["https://v/a"]
+        infos: dict[str, object] = {
+            "https://c": self.channel_info(urls),
+            "https://v/a": video("a"),
+            **self.uploads("a"),
+        }
+        processor = self.download(infos)
+        self.assertNotIn(UPLOADS_URL, processor.extracted)
+        self.assertEqual(
+            [m for m in self.messages(EntityMessage) if m.entity.episode], []
         )
 
     def test_a_single_video_has_no_episode(self):

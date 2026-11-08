@@ -146,12 +146,23 @@ class TestDrawing(ViewTestCase):
         self.view.set_count(10)
         self.view.set_item_entity(
             Item.Entity(
-                "abc", 2, 0, 365 * Util.SECONDS_PER_DAY, "A title", "", 0, "", ""
+                "abc", 2, 0, 365 * Util.SECONDS_PER_DAY, "A title", "", 0, "", "", 9
             )
         )
         line = self.draw().text()
-        self.assertIn("1971-01-01 │    9 │ A title", line)  # numbered from the oldest
+        # The episode number, as written to the file
+        self.assertIn("1971-01-01 │    9 │ A title", line)
         self.assertIn("[abc]", line)
+
+    def test_item_line_without_an_episode(self):
+        # The position in the list is no episode number, nothing is shown
+        self.view.set_count(10)
+        self.view.set_item_entity(
+            Item.Entity(
+                "abc", 2, 0, 365 * Util.SECONDS_PER_DAY, "A title", "", 0, "", ""
+            )
+        )
+        self.assertIn("1971-01-01 │      │ A title", self.draw().text())
 
     def test_media_lines(self):
         self.view.set_item_media(

@@ -135,6 +135,7 @@ FREEFORM_ATOMS: tuple[tuple[str, str], ...] = (
     ("CHANNEL_URL", "channel_url"),
     ("CHANNEL_ID", "channel_id"),
     ("VIDEO_URL", "webpage_url"),
+    ("EPISODE_ORDER", "vidl_episode_order"),
 )
 
 HASHTAG = re.compile(r"(?<![\w#])#(\w+)")
@@ -152,16 +153,8 @@ class MetadataContext:
     thumbnail_url: str | None = None  # channel graphic (http/https only)
     channel_description: str | None = None  # for the "sdes" atom
     group: str | None = None  # title of the parent playlist, for "©grp"
-
-
-def episode_number(playlist_count: int, playlist_index: int) -> int | None:
-    """The episode number counted from the oldest entry, as entries are newest
-    first, or None when the index is outside the playlist."""
-    if not _is_int(playlist_count) or not _is_int(playlist_index):
-        return None
-    if 1 <= playlist_index <= playlist_count:
-        return playlist_count - playlist_index + 1
-    return None
+    # How the episode number was counted (vidl/episodes.py), written next to it
+    episode_order: str | None = None
 
 
 def channel_thumbnail(info: Mapping[str, object]) -> str | None:
@@ -370,6 +363,50 @@ def atom_values(info: Mapping[str, object]) -> dict[str, list[object]]:
     return values
 
 
+def metadata_updates(
+    info: Mapping[str, object], context: MetadataContext
+) -> dict[str, object]:
+    """The fields the video stage adds to the info dict of a video: the
+    meta_* tags for ffmpeg, series, episode and season numbers, the channel
+    description for AtomPostProcessor and the channel cover. Also used to
+    retag existing files (vidl/retag.py), so both write the same tags."""
+    updates: dict[str, object] = {}
+    if (name := channel_name(info, context)) is not None:
+        updates.update(dict.fromkeys(CHANNEL_TAGS, name))
+    if _is_int(context.episode_number):
+        updates["episode_number"] = context.episode_number
+        if order := _name(context.episode_order):
+            updates["vidl_episode_order"] = order
+    if isinstance(context.series, str) and context.series and not info.get("series"):
+        updates["series"] = context.series
+    if (season := season_number(info, context)) is not None:
+        updates["season_number"] = season
+    description = info.get("description")
+    tags: dict[str, str | None] = {
+        "meta_media_type": MEDIA_TYPE_TV_SHOW,
+        "meta_hd_video": hd_video(info),
+        "meta_date": episode_date(info),
+        "meta_episode_id": episode_id(info),
+        "meta_network": network_name(info),
+        "meta_description": short_description(description),
+        "meta_synopsis": synopsis(description),
+        "meta_keywords": keywords(info),
+        # yt-dlp fills the comment with the video URL, an empty value
+        # makes ffmpeg remove the tag
+        "meta_comment": "",
+        "meta_grouping": _name(context.group),
+        # Not for ffmpeg, read by AtomPostProcessor
+        "vidl_channel_description": _text(context.channel_description),
+    }
+    updates.update({key: tag for key, tag in tags.items() if tag is not None})
+    if url := _http_url(context.thumbnail_url):
+        updates["thumbnails"] = [
+            {"id": "channel", "url": url, "ext": _thumbnail_ext(url)}
+        ]
+        updates["thumbnail"] = url
+    return updates
+
+
 class MetadataPostProcessor(PostProcessor):
     KEY: ClassVar[str] = "EpisodeMetadata"
     REPORT_PROGRESS: ClassVar[bool] = False
@@ -396,7 +433,7 @@ class MetadataPostProcessor(PostProcessor):
             return [], info
         try:
             # Collected first, so a failure while reading leaves info unchanged
-            info.update(self.__updates(info, context))
+            info.update(metadata_updates(info, context))
         except Exception as e:  # noqa: BLE001 - must never break a download
             self.__warn(f"Metadata not added, {type(e).__name__}: {e}")
         return [], info
@@ -406,47 +443,6 @@ class MetadataPostProcessor(PostProcessor):
     def add_progress_hook(self, ph: Callable[[str], object]) -> None:  # pyright: ignore[reportImplicitOverride]
         if self.REPORT_PROGRESS:
             super().add_progress_hook(ph)
-
-    def __updates(
-        self, info: Mapping[str, object], context: MetadataContext
-    ) -> dict[str, object]:
-        updates: dict[str, object] = {}
-        if (name := channel_name(info, context)) is not None:
-            updates.update(dict.fromkeys(CHANNEL_TAGS, name))
-        if _is_int(context.episode_number):
-            updates["episode_number"] = context.episode_number
-        if (
-            isinstance(context.series, str)
-            and context.series
-            and not info.get("series")
-        ):
-            updates["series"] = context.series
-        if (season := season_number(info, context)) is not None:
-            updates["season_number"] = season
-        description = info.get("description")
-        tags: dict[str, str | None] = {
-            "meta_media_type": MEDIA_TYPE_TV_SHOW,
-            "meta_hd_video": hd_video(info),
-            "meta_date": episode_date(info),
-            "meta_episode_id": episode_id(info),
-            "meta_network": network_name(info),
-            "meta_description": short_description(description),
-            "meta_synopsis": synopsis(description),
-            "meta_keywords": keywords(info),
-            # yt-dlp fills the comment with the video URL, an empty value
-            # makes ffmpeg remove the tag
-            "meta_comment": "",
-            "meta_grouping": _name(context.group),
-            # Not for ffmpeg, read by AtomPostProcessor
-            "vidl_channel_description": _text(context.channel_description),
-        }
-        updates.update({key: tag for key, tag in tags.items() if tag is not None})
-        if url := _http_url(context.thumbnail_url):
-            updates["thumbnails"] = [
-                {"id": "channel", "url": url, "ext": _thumbnail_ext(url)}
-            ]
-            updates["thumbnail"] = url
-        return updates
 
     def __warn(self, message: str) -> None:
         # A failing logger must not break a download either

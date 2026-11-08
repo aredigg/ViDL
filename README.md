@@ -78,6 +78,49 @@ slot when only one is running, otherwise at least half of them and never fewer t
 both, 3 or 4 slots: 2, 5 or 6 slots: 3). Downloads that are running complete first. Below the
 threshold, the slot pauses for 5 seconds and continues with the next video.
 
+### Retagging existing files
+
+```sh
+python -m vidl.retag FOLDER --dry-run   # or: vidl-retag FOLDER --dry-run
+python -m vidl.retag FOLDER
+```
+
+Rewrites the tags of the `mp4` and `m4v` files of YouTube videos in a folder (and its subfolders)
+to the format of new downloads, see `metadata` below. The video id is taken from the `tven` tag, or
+from the file name when `tven` holds no id (older versions wrote the title there). The video is
+looked up on YouTube, and only used if its id matches and its duration is that of the file (within
+`--tolerance`, 5 seconds or 2%).
+
+- **Start with `--dry-run`**, which shows each tag that would change, and `--limit 3` to try it on a
+  few files.
+- The streams are never touched. The tags are written to a copy that is read back and checked
+  (every tag as planned, all others and the streams unchanged) before it replaces the file. A
+  failure leaves the file as it was. The copy keeps the modification time, the permissions and, on
+  macOS, the extended attributes (Finder tags). Its creation date is new. It needs room for one copy
+  of the file in the same folder (on APFS a clone, which takes almost no space).
+- The episode number (`tves`) is the position of the video among all the uploads of its channel,
+  see below: the first video of the channel is 1. The list of the uploads is fetched once for each
+  channel (about one request per 100 videos), and `EPISODE_ORDER` is written to say how the number
+  was counted. When the list cannot be fetched, or the video is not in it (e.g. for members only),
+  the number in the file is kept. A number that was counted over a playlist is kept as well.
+- The season (`tvsn`) is set as for a new download: 1, unless YouTube gives the video a season of
+  its own. A season in the file is replaced, also in files that otherwise have the new format.
+- The grouping (`©grp`), the cover and everything else that cannot be derived from a single video
+  are kept. The resolution class (`hdvd`) is that of the file, read with `ffprobe`.
+- Files that already have the new format, with the episode numbered as described, are skipped
+  without a request, so an interrupted run can be repeated. `--force` checks them again. Files
+  from earlier versions of ViDL, whose numbers were counted in another way, have no
+  `EPISODE_ORDER` and are therefore done again.
+- YouTube is asked slowly (`--sleep`, 3 seconds), and the channel description once per channel
+  (`--no-channel-description` leaves it out). The run stops when YouTube restricts the requests
+  (bot check, rate limit, five restricted answers in a row) or when the network is down. Cookies
+  come from `--cookies-from-browser` or `General.cookie_browser` of `--config` (default
+  `config.ini` in the current folder, which is only read).
+- Symbolic links, hidden files and files that are no readable mp4 are skipped.
+
+The exit status is 0 when all went well, 1 when a file failed or the run was stopped, 2 for wrong
+arguments.
+
 ### Exit status
 
 | Status | Meaning                                                  |
@@ -170,13 +213,28 @@ Styling and positioning of the cues is lost in that format.
 `metadata` writes these mp4 tags: title (`©nam`), the channel as artist, album artist, album and show
 (`©ART`, `aART`, `©alb`, `tvsh`), `stik` 10 (TV show), the resolution class (`hdvd`: 0 below 720,
 1 for 720, 2 for 1080, 3 for 2160 and up), the publication date as `YYYY-MM-DD` (`©day`), genre,
-episode number counted from the oldest video of the playlist or channel tab (`tves`), the video id
+episode number (`tves`), the video id
 (`tven`), season 1 unless yt-dlp provides one (`tvsn`), the extractor (`tvnn`), the description cut to
 255 characters (`desc`) and in full (`ldes`), the channel description (`sdes`), hashtags of the title
 and description (`keyw`), explicit (`rtng`) for videos with an age limit of 18, and the playlist or
 channel tab, such as Shorts and Live, as grouping (`©grp`). The comment and all encoder tags are
-left empty. The video URL, the channel URL and id, and the upload time as ISO timestamp are
-kept in the freeform tags `VIDEO_URL`, `CHANNEL_URL`, `CHANNEL_ID` and `UPLOAD_TIMESTAMP`.
+left empty. The video URL, the channel URL and id, the upload time as ISO timestamp and how the
+episode was counted are kept in the freeform tags `VIDEO_URL`, `CHANNEL_URL`, `CHANNEL_ID`,
+`UPLOAD_TIMESTAMP` and `EPISODE_ORDER`.
+
+#### Episode numbers
+
+The first video of a channel is episode 1, the next 2, and so on, in the order they were published.
+YouTube keeps a list of all uploads of every channel, videos, shorts and streams together, newest
+first, and the number is the position counted from the end of that list. It is the same whether the
+video is found in the videos, shorts or live tab, and a new video never changes the number of the
+others (only a removed video moves the ones after it). The list is fetched when a video is about
+to be downloaded, once per run of a channel, and shown in the panel. Without the list no number is
+written, rather than a wrong one.
+
+The videos of a playlist (an address with `list=`) are numbered in the order of the playlist, the
+first is 1, as that is the order its maker gave it. Other sites, and videos on their own, get no
+episode number.
 
 ### Large downloads, disk space and HLS
 

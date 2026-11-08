@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 vidl = "vidl.__main__:main"
+vidl-retag = "vidl.retag:main"
 
 [tool.setuptools]
 packages = ["vidl"]

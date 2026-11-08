@@ -58,7 +58,6 @@ class FakeChannel(Channel):
         processor: YoutubeDL,
         queue: Queue[Message],
         playlist_index: int = 1,
-        playlist_count: int = 0,
     ) -> bool:
         self.calls.append((slot, processor))
         if isinstance(self.behaviour, BaseException):

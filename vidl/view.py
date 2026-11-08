@@ -144,7 +144,6 @@ class View:
         self.__timer: int | None = None
         self.__top = View.Top()
         self.__temp_filepath: str | None = None
-        self.__playlist_length = 0
         self.__bitrate_ring: deque[int] = deque(maxlen=View.RING_SIZE)
         # (elapsed, size) samples, the window used for the average bitrate
         self.__sample_ring: deque[tuple[float, int]] = deque(maxlen=View.RING_SIZE)
@@ -392,13 +391,12 @@ class View:
         if self.__item_entity is not None:
             max_len = self.__size.cols - 34
             if max_len > 0:
-                index = 0
-                index_string = ""
-                if self.__item_entity.index:
-                    index = self.__item_entity.index
-                if index > 0 and self.__playlist_length > 0:
-                    index = max(1, self.__playlist_length - index + 1)
-                    index_string = str(index)
+                # The episode number, the same as is written to the file
+                index_string = (
+                    str(self.__item_entity.episode)
+                    if self.__item_entity.episode > 0
+                    else ""
+                )
                 line = (
                     f"{Util.get_date(self.__item_entity.date):>10.10}"
                     + " │ "
@@ -670,7 +668,6 @@ class View:
     def set_count(self, value: int) -> None:
         if value > 0:
             self.__top = View.Top(self.__top.name, f"({value})")
-            self.__playlist_length = value
 
     def set_cutoff(self, value: int) -> None:
         if value > 0:

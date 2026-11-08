@@ -17,6 +17,7 @@ from yt_dlp.YoutubeDL import YoutubeDL
 from .config import Config
 from .cookies import CookieWatch, Refresh
 from .debug import Debug
+from .episodes import EpisodeIndex, complete_ids, ids_of, index_for
 from .error import Error
 from .item import Item
 from .message import (
@@ -35,7 +36,6 @@ from .metadata import (
     MetadataContext,
     MetadataPostProcessor,
     channel_thumbnail,
-    episode_number,
 )
 from .preflight import Preflight, PreflightError, PreflightInterrupted
 from .shared import Shared
@@ -107,6 +107,9 @@ class Channel:
         self.__cookies: CookieWatch | None = None
         # Set when the download was refused before it started, see __download
         self.__refused: bool = False
+        # The numbering of the videos of the channel or playlist, see episodes.py,
+        # given by the playlist to its entries
+        self.__episodes: EpisodeIndex | None = None
 
     def row(self):
         with Channel.__lock:
@@ -157,6 +160,9 @@ class Channel:
     def set_preflight(self, preflight: Preflight | None):
         self.__preflight = preflight
 
+    def set_episodes(self, episodes: EpisodeIndex | None):
+        self.__episodes = episodes
+
     def set_cookies(self, cookies: CookieWatch | None):
         self.__cookies = cookies
 
@@ -199,7 +205,6 @@ class Channel:
         processor: YoutubeDL,
         queue: Queue[Message],
         playlist_index: int = 1,
-        playlist_count: int = 0,
     ):
         if self.__slot_index is not None:
             return False
@@ -209,10 +214,12 @@ class Channel:
         self.__refused = False
         if self.__sub_level == 0:
             self.__reset_epoch_cutoff()
+            # The list of the videos is that of this run, not an earlier one
+            self.__episodes = None
         previous_attempt = self.__last_attempt_date
         try:
             self.__set_attempt_date()
-            result = self.__extract(processor, queue, playlist_index, playlist_count)
+            result = self.__extract(processor, queue, playlist_index)
             if result:
                 self.__set_download_date()
                 self.__set_error(None)
@@ -231,7 +238,6 @@ class Channel:
         processor: YoutubeDL,
         queue: Queue[Message],
         playlist_index: int,
-        playlist_count: int,
     ) -> bool:
         if self.__slot_index is None:
             return False
@@ -309,10 +315,17 @@ class Channel:
                 )
 
                 group = self.__group(info)
-                # Each sub channel keeps its position in the entries, which
-                # is what the panel shows, and gives the episode number
                 sub_channels: list[tuple[int, Channel]] = []
                 entries = Item.get_lst(info, "entries")
+                if self.__episodes is None and Config.settings["Download"].get(
+                    "metadata"
+                ):
+                    # The first playlist numbers the videos of all below it
+                    self.__episodes = index_for(
+                        info,
+                        lambda url: self.__list_ids(processor, url),
+                        ids_of(entries),
+                    )
                 if entries:
                     queue.put(
                         CountMessage(
@@ -357,10 +370,9 @@ class Channel:
                     channel.set_metadata_processor(self.__metadata_pp)
                     channel.set_preflight(self.__preflight)
                     channel.set_cookies(self.__cookies)
+                    channel.set_episodes(self.__episodes)
                     channel.assign_metadata(replace(self.__metadata, group=group))
-                    _ = channel.download(
-                        self.__slot_index, processor, queue, position, len(entries)
-                    )
+                    _ = channel.download(self.__slot_index, processor, queue, position)
                     # A nested playlist's cutoff does not apply to its siblings
                     if not channel.is_playlist():
                         self.assign_epoch_cutoff(channel.get_epoch_cutoff())
@@ -428,11 +440,13 @@ class Channel:
                     self.__interrupted = True
                     return False
                 process_time = int(time())
-                self.__set_metadata_context(playlist_index, playlist_count)
+                self.__set_metadata_context(
+                    True, self.__prepare_episode(queue, info, playlist_index)
+                )
                 try:
                     ret = self.__download(processor, queue, info)
                 finally:
-                    self.__set_metadata_context(None, 0)
+                    self.__set_metadata_context(False)
                 self.__refresh_cookies(processor, queue)
                 if self.__refused or self.__interrupted:
                     # Nothing was downloaded, so neither is there a pause
@@ -494,17 +508,64 @@ class Channel:
             ...
         return None
 
-    def __set_metadata_context(self, playlist_index: int | None, playlist_count: int):
+    def __set_metadata_context(
+        self, active: bool, episode: tuple[int, str] | None = None
+    ):
         if self.__metadata_pp is None:
             return
-        if playlist_index is None:
+        if not active:
             self.__metadata_pp.set_context(None)
             return
-        episode = None
-        # A single video at the top level is not part of a playlist
-        if self.__sub_level > 0 and Config.settings["Download"].get("metadata"):
-            episode = episode_number(playlist_count, playlist_index)
-        self.__metadata_pp.set_context(replace(self.__metadata, episode_number=episode))
+        number, order = episode if episode is not None else (None, None)
+        self.__metadata_pp.set_context(
+            replace(self.__metadata, episode_number=number, episode_order=order)
+        )
+
+    # The number of the video in its channel or playlist (see episodes.py), asked
+    # for when the video is about to be downloaded, which is when the list of
+    # the uploads of a channel is fetched, once. The panel shows it as well.
+    def __prepare_episode(
+        self, queue: Queue[Message], info: Mapping[str, object], playlist_index: int
+    ) -> tuple[int, str] | None:
+        episode = self.__episode_of(Item.get_str(info, "id"))
+        if episode is not None and self.__slot_index is not None:
+            queue.put(
+                EntityMessage(
+                    index=self.__slot_index,
+                    provider=Message.Provider.CHANNEL,
+                    entity=Item.get_entity(
+                        info=cast(dict[str, object], info),
+                        name="",
+                        index=playlist_index,
+                        episode=episode[0],
+                    ),
+                )
+            )
+        return episode
+
+    def __episode_of(self, video_id: str) -> tuple[int, str] | None:
+        if self.__episodes is None or not video_id:
+            return None
+        try:
+            number = self.__episodes.number(video_id)
+        except Exception as e:  # noqa: BLE001 - no number is better than a wrong one
+            self.__debug(f"Episodes: no list ({type(e).__name__}: {e})")
+            return None
+        if number is None:
+            self.__debug(f"Episodes: {video_id} is not in the list")
+            return None
+        return number, self.__episodes.order
+
+    # The ids of a playlist, newest first as YouTube lists them
+    def __list_ids(self, processor: YoutubeDL, url: str) -> list[str]:
+        self.__debug(f"Episodes: listing {url}")
+        info = cast(
+            Mapping[str, object] | None,
+            processor.extract_info(url, download=False, process=False),
+        )
+        ids = complete_ids(info) if info is not None else []
+        self.__debug(f"Episodes: {len(ids)} videos")
+        return ids
 
     # When yt-dlp noticed that the cookies were rotated in the browser, the
     # current ones are loaded into the downloader, see vidl/cookies.py

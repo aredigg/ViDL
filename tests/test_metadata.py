@@ -32,12 +32,12 @@ from vidl.metadata import (
     channel_thumbnail,
     episode_date,
     episode_id,
-    episode_number,
     hashtags,
     hd_video,
     is_new_download,
     iso_timestamp,
     keywords,
+    metadata_updates,
     network_name,
     new_file_atom_pp,
     new_file_embed_subtitle_pp,
@@ -140,32 +140,40 @@ def youtube_dl(params: dict[str, object]) -> YoutubeDL:
     return cast(Callable[[dict[str, object]], YoutubeDL], YoutubeDL)(params)
 
 
-class TestEpisodeNumber(unittest.TestCase):
-    def test_table(self):
-        cases: list[tuple[object, object, int | None]] = [
-            (10, 1, 10),  # newest
-            (10, 10, 1),  # oldest
-            (10, 4, 7),
-            (1, 1, 1),
-            (10, 0, None),
-            (10, -1, None),
-            (10, 11, None),
-            (0, 0, None),
-            (0, 1, None),
-            (-3, 1, None),
-            (True, 1, None),
-            (10, True, None),
-            (10, False, None),
-            (10, 1.0, None),
-            ("10", "1", None),
-            (None, 1, None),
-            (10, None, None),
-        ]
-        for count, index, expected in cases:
-            with self.subTest(count=count, index=index):
-                self.assertEqual(
-                    episode_number(cast(int, count), cast(int, index)), expected
+class TestEpisodeOrder(unittest.TestCase):
+    """How the episode number was counted is written next to it."""
+
+    def test_the_order_goes_with_the_number(self):
+        info = metadata_updates(
+            {"id": "abc"}, MetadataContext(episode_number=3, episode_order="uploads")
+        )
+        self.assertEqual(info["episode_number"], 3)
+        self.assertEqual(info["vidl_episode_order"], "uploads")
+        prefix = "----:com.apple.iTunes:"
+        values = atom_values(cast("dict[str, object]", info))
+        self.assertEqual(
+            bytes(cast(MP4FreeForm, values[prefix + "EPISODE_ORDER"][0])), b"uploads"
+        )
+
+    def test_no_order_without_a_number(self):
+        info = metadata_updates({"id": "abc"}, MetadataContext(episode_order="uploads"))
+        self.assertNotIn("episode_number", info)
+        self.assertNotIn("vidl_episode_order", info)
+        self.assertNotIn("----:com.apple.iTunes:EPISODE_ORDER", atom_values(info))
+
+    def test_a_number_without_an_order(self):
+        info = metadata_updates({"id": "abc"}, MetadataContext(episode_number=3))
+        self.assertEqual(info["episode_number"], 3)
+        self.assertNotIn("vidl_episode_order", info)
+
+    def test_odd_orders_are_left_out(self):
+        for order in ("", "  ", None):
+            with self.subTest(order=order):
+                info = metadata_updates(
+                    {"id": "abc"},
+                    MetadataContext(episode_number=3, episode_order=order),
                 )
+                self.assertNotIn("vidl_episode_order", info)
 
 
 class TestChannelThumbnail(unittest.TestCase):

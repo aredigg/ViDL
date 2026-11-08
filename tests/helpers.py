@@ -165,7 +165,10 @@ def playlist(playlist_id: str, urls: list[str], **extra: object) -> dict[str, ob
         "_type": "playlist",
         "id": playlist_id,
         "title": f"Playlist {playlist_id}",
-        "entries": [{"_type": "url", "url": url} for url in urls],
+        # Like the entries of yt-dlp, with the id of the video
+        "entries": [
+            {"_type": "url", "id": url.rsplit("/", 1)[-1], "url": url} for url in urls
+        ],
     }
     info.update(extra)
     return info

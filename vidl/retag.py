@@ -8,18 +8,24 @@ when that is no id (older versions of ViDL wrote the title there, and the file
 name is the id), the video is looked up on YouTube, and the tags are written
 with the same rules as for a new download (metadata_updates, atom_values).
 
-Safety, as the files are the only copy:
+Speed and safety:
 
-- Nothing is written to the file itself. The tags are written with mutagen to
-  a copy that is checked and then replaces the file, so the audio and video
-  streams are never touched, and a failure leaves the file as it was. The
-  copy keeps the modification time and permissions, and on macOS the extended
+- By default the tags are written to the file itself with mutagen: no copy,
+  so it is as fast as it can be and needs no free space. The audio and video
+  streams are not touched, but mutagen moves the data after the tags when they
+  need more room, so a write that is interrupted (a crash, a full disk, an
+  unplugged drive) can damage the file. Ctrl-C is held back until the write is
+  done. The file is read back and checked afterwards, and the modification
+  time is restored. A failed check is reported as "the file may be damaged".
+- With --safe the tags are written with mutagen to a copy that is checked and
+  then replaces the file, so a failure leaves the file as it was. The copy
+  keeps the modification time and permissions, and on macOS the extended
   attributes (Finder tags), as "cp -p" does. Its creation date is new.
 - A file is only changed when YouTube's answer is for the same video, that is
   its id matches and its duration is that of the file (within a tolerance).
-- Before the copy replaces the file, it is read back: every tag must be as
-  planned, all other tags (such as the cover) unchanged, and the streams,
-  checked with ffprobe, the same. The file must also not have changed
+- The new file (the copy before it replaces the file) is read back: every tag
+  must be as planned, all other tags (such as the cover) unchanged, and the
+  streams, checked with ffprobe, the same. The file must also not have changed
   meanwhile.
 - Only the tags of new downloads are written. The episode number is that of the
   video in the uploads of its channel (the first video is 1, see
@@ -40,13 +46,14 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import ClassVar, Protocol, cast
@@ -452,7 +459,9 @@ class YoutubeSource:
             "ignoreerrors": False,
             "logger": _Quiet(),
             "retries": 3,
-            "sleep_interval_requests": 1,
+            # No sleep_interval_requests: yt-dlp would pause after each of the
+            # several HTTP requests of one video (about 4 s), on top of the
+            # pause of the Retagger, which is the interval between videos
         }
         if cookie_browser:
             settings["cookiesfrombrowser"] = (cookie_browser, None, None, None)
@@ -564,6 +573,7 @@ class Retagger:
         *,
         dry_run: bool = False,
         force: bool = False,
+        safe: bool = False,
         sleep: float = 3.0,
         tolerance: float = 5.0,
         channel_descriptions: bool = True,
@@ -571,12 +581,14 @@ class Retagger:
         verbose: bool = False,
         probe: Callable[[str], Probe | None] = probe_file,
         pause: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
         write: Callable[[str], None] = print,
         copy: Callable[[str, str], None] = clone,
     ) -> None:
         self.__source = source
         self.__dry_run = dry_run
         self.__force = force
+        self.__safe = safe
         self.__sleep = sleep
         self.__tolerance = tolerance
         self.__channel_descriptions = channel_descriptions
@@ -584,6 +596,8 @@ class Retagger:
         self.__verbose = verbose
         self.__probe = probe
         self.__pause = pause
+        self.__clock = clock
+        self.__last_request: float | None = None  # when the last one started
         self.__write = write
         self.__copy = copy
         self.__requests = 0  # the requests made so far
@@ -662,7 +676,10 @@ class Retagger:
         text = f"{len(changes)} tag{'s' if len(changes) != 1 else ''}"
         if self.__dry_run:
             return Outcome(path, Status.WOULD_UPDATE, text, changes)
-        self.__replace(path, before, tags, target, probe, length)
+        if self.__safe:
+            self.__replace(path, before, tags, target, probe, length)
+        else:
+            self.__rewrite(path, before, tags, target, probe, length)
         return Outcome(path, Status.UPDATED, text, changes)
 
     def __fetch(self, ids: list[str], length: float) -> Mapping[str, object]:
@@ -693,10 +710,18 @@ class Retagger:
             return info
         raise _Skip("; ".join(problems))
 
-    # YouTube is asked slowly: a pause before each request, but the first
+    # YouTube is asked slowly: the requests start at least `sleep` seconds
+    # apart. The time the request and the work on the file took counts, so
+    # the pause is only what is left of the interval (never more than it, also
+    # when the clock stood still or went back, e.g. in a sleeping computer)
     def __throttle(self) -> None:
-        if self.__requests:
-            self.__pause(self.__sleep)
+        now = self.__clock()
+        if self.__last_request is not None:
+            wait = self.__sleep - (now - self.__last_request)
+            if wait > 0:
+                self.__pause(min(wait, self.__sleep))
+                now = self.__clock()
+        self.__last_request = now
         self.__requests += 1
 
     def __note(self, error: Error) -> None:
@@ -776,6 +801,52 @@ class Retagger:
                 self.__note(e.error)
         return self.__channels[key] or existing
 
+    def __rewrite(
+        self,
+        path: str,
+        before: os.stat_result,
+        tags: Mapping[str, object],
+        target: Target,
+        probe: Probe | None,
+        length: float,
+    ) -> None:
+        """Writes the tags to the file itself: no copy is made, which is the
+        fastest, needs no free space and keeps the file (its creation date,
+        extended attributes, hard links) as it is. mutagen moves the data after
+        the tags when they need more room, so a write that is interrupted may
+        leave a damaged file. The modification time is restored."""
+        now = os.stat(path)
+        if (now.st_size, now.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+            raise RuntimeError("the file changed while it was being processed")
+        started = False
+        try:
+            mp4 = MP4(path)
+            self.__apply(mp4, target)
+            started = True
+            with _interrupt_after():
+                mp4.save()  # pyright: ignore[reportUnknownMemberType]
+            self.__check(path, tags, target, probe, length)
+        except Exception as e:
+            if started:
+                raise RuntimeError(f"the file may be damaged: {e}") from e
+            raise
+        finally:
+            if started:
+                with suppress(OSError):
+                    os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    @staticmethod
+    def __apply(mp4: MP4, target: Target) -> None:
+        if mp4.tags is None:
+            mp4.add_tags()
+        written = mp4.tags
+        assert written is not None
+        for atom in target.remove:
+            if atom in written:
+                del written[atom]
+        for atom, values in target.values.items():
+            written[atom] = values
+
     def __replace(
         self,
         path: str,
@@ -785,20 +856,13 @@ class Retagger:
         probe: Probe | None,
         length: float,
     ) -> None:
+        """Writes the tags to a copy that is checked and then replaces the file."""
         directory = os.path.dirname(path) or "."
         temporary = os.path.join(directory, f".vidl-retag-{uuid.uuid4().hex}.tmp")
         try:
             self.__copy(path, temporary)
             mp4 = MP4(temporary)
-            if mp4.tags is None:
-                mp4.add_tags()
-            written = mp4.tags
-            assert written is not None
-            for atom in target.remove:
-                if atom in written:
-                    del written[atom]
-            for atom, values in target.values.items():
-                written[atom] = values
+            self.__apply(mp4, target)
             mp4.save()  # pyright: ignore[reportUnknownMemberType]
             self.__check(temporary, tags, target, probe, length)
             with open(temporary, "rb+") as f:
@@ -860,6 +924,27 @@ class Retagger:
                 self.__write(f"      {change}")
 
 
+@contextmanager
+def _interrupt_after() -> Generator[None]:
+    """Holds back Ctrl-C while the tags are written to the file itself, as an
+    interrupted write may damage it: the interrupt is raised when it is done.
+    Without a main thread (no signals) nothing is held back."""
+    received: list[int] = []
+    try:
+        previous = signal.signal(
+            signal.SIGINT, lambda number, _frame: received.append(number)
+        )
+    except ValueError:  # not in the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        _ = signal.signal(signal.SIGINT, previous)
+        if received:
+            raise KeyboardInterrupt
+
+
 def _tags(mp4: MP4) -> dict[str, object]:
     return dict(mp4.tags) if mp4.tags is not None else {}
 
@@ -887,6 +972,7 @@ class Arguments(argparse.Namespace):
     folder: str = ""
     dry_run: bool = False
     force: bool = False
+    safe: bool = False
     no_recursive: bool = False
     sleep: float = 3.0
     tolerance: float = 5.0
@@ -936,6 +1022,13 @@ def parser() -> argparse.ArgumentParser:
         help="also retag files that already have the current format",
     )
     _ = result.add_argument(
+        "--safe",
+        action="store_true",
+        help="write the tags to a checked copy that replaces the file, instead "
+        + "of to the file itself: slower, needs free space, but a failed or "
+        + "interrupted write never damages the file",
+    )
+    _ = result.add_argument(
         "--no-recursive", action="store_true", help="leave out subfolders"
     )
     _ = result.add_argument(
@@ -943,7 +1036,8 @@ def parser() -> argparse.ArgumentParser:
         type=float,
         default=3.0,
         metavar="SECONDS",
-        help="pause between requests to YouTube (default: %(default)s)",
+        help="minimum time between the starts of two requests to YouTube, the "
+        + "time the work on a file takes counts (default: %(default)s)",
     )
     _ = result.add_argument(
         "--tolerance",
@@ -1013,6 +1107,7 @@ def main(
         youtube,
         dry_run=arguments.dry_run,
         force=arguments.force,
+        safe=arguments.safe,
         sleep=arguments.sleep,
         tolerance=arguments.tolerance,
         channel_descriptions=not arguments.no_channel_description,
@@ -1022,7 +1117,7 @@ def main(
     try:
         summary = retagger.run(arguments.folder, recursive=not arguments.no_recursive)
     except KeyboardInterrupt:
-        print("Interrupted, no file is half written", file=sys.stderr)
+        print("Interrupted, the file being written was finished", file=sys.stderr)
         return 130
     finally:
         close = getattr(youtube, "close", None)

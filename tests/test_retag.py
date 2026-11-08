@@ -3,10 +3,12 @@ import contextlib
 import io
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from collections.abc import Mapping
 from typing import Any, ClassVar, cast
@@ -616,12 +618,21 @@ class RetagTestCase(IsolatedTestCase):
         self.folder = self.temp_dir()
         self.output: list[str] = []
         self.pauses: list[float] = []
+        self.now = 1000.0  # the clock of the retagger, moved by pauses
+
+    def pause(self, seconds: float) -> None:
+        self.pauses.append(seconds)
+        self.now += seconds
+
+    def clock(self) -> float:
+        return self.now
 
     def retagger(self, source: FakeSource, **options: Any) -> Retagger:
         options.setdefault("sleep", 2.5)
         return Retagger(
             source,
-            pause=self.pauses.append,
+            pause=self.pause,
+            clock=self.clock,
             write=self.output.append,
             **options,
         )
@@ -1230,7 +1241,9 @@ class TestSafety(RetagTestCase):
                 _ = f.write(b"half")
             raise OSError("disk full")
 
-        retagger = self.retagger(FakeSource({ID: youtube_info()}), copy=failing)
+        retagger = self.retagger(
+            FakeSource({ID: youtube_info()}), copy=failing, safe=True
+        )
         outcome = retagger.process(path)
         self.assertEqual(outcome.status, Status.FAILED)
         self.assertIn("disk full", outcome.message)
@@ -1245,7 +1258,9 @@ class TestSafety(RetagTestCase):
             "_Retagger__check",
             side_effect=RuntimeError("the tag was not written"),
         ):
-            outcome = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+            outcome = self.retagger(
+                FakeSource({ID: youtube_info()}), safe=True
+            ).process(path)
         self.assertEqual(outcome.status, Status.FAILED)
         self.assertEqual(self.bytes_of(path), before)
         self.assertEqual(os.stat(path).st_mtime_ns, mtime)
@@ -1259,7 +1274,9 @@ class TestSafety(RetagTestCase):
             with open(source, "ab") as f:  # e.g. a download that is still going
                 _ = f.write(b"more")
 
-        retagger = self.retagger(FakeSource({ID: youtube_info()}), copy=copy_and_touch)
+        retagger = self.retagger(
+            FakeSource({ID: youtube_info()}), copy=copy_and_touch, safe=True
+        )
         outcome = retagger.process(path)
         self.assertEqual(outcome.status, Status.FAILED)
         self.assertIn("changed while", outcome.message)
@@ -1272,12 +1289,25 @@ class TestSafety(RetagTestCase):
         streams = probe_file(path).streams  # pyright: ignore[reportOptionalMemberAccess]
         answers = iter([Probe(180, streams), Probe(180, streams[:1])])
         retagger = self.retagger(
-            FakeSource({ID: youtube_info()}), probe=lambda p: next(answers)
+            FakeSource({ID: youtube_info()}), probe=lambda p: next(answers), safe=True
         )
         outcome = retagger.process(path)
         self.assertEqual(outcome.status, Status.FAILED)
         self.assertIn("streams", outcome.message)
         self.assertEqual(texts(path)["tven"], ("Old title",))
+
+    def test_changed_streams_are_reported_when_writing_in_place(self):
+        path = old_file(self.path())
+        streams = probe_file(path).streams  # pyright: ignore[reportOptionalMemberAccess]
+        answers = iter([Probe(180, streams), Probe(180, streams[:1])])
+        retagger = self.retagger(
+            FakeSource({ID: youtube_info()}), probe=lambda p: next(answers)
+        )
+        outcome = retagger.process(path)
+        self.assertEqual(outcome.status, Status.FAILED)
+        self.assertIn("may be damaged", outcome.message)
+        self.assertIn("streams", outcome.message)
+        self.assertEqual(self.leftovers(), [])
 
     def test_the_check_finds_every_kind_of_difference(self):
         path = old_file(self.path())
@@ -1324,9 +1354,202 @@ class TestSafety(RetagTestCase):
         before = self.bytes_of(path)
         os.chmod(self.folder, 0o500)
         self.addCleanup(os.chmod, self.folder, 0o700)
-        outcome = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        outcome = self.retagger(FakeSource({ID: youtube_info()}), safe=True).process(
+            path
+        )
         self.assertEqual(outcome.status, Status.FAILED)
         self.assertEqual(self.bytes_of(path), before)
+
+    def test_a_read_only_folder_is_no_problem_in_place(self):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores permissions")
+        path = old_file(self.path())
+        os.chmod(self.folder, 0o500)
+        self.addCleanup(os.chmod, self.folder, 0o700)
+        outcome = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED, outcome.message)
+        self.assertEqual(texts(path)["tven"], (ID,))
+
+
+@needs_ffmpeg
+class TestInPlace(RetagTestCase):
+    """The default: the tags are written to the file itself, without a copy."""
+
+    def no_copy(self, source: str, target: str) -> None:
+        raise AssertionError("a copy was made")
+
+    def test_no_copy_is_made(self):
+        path = old_file(self.path())
+        retagger = self.retagger(FakeSource({ID: youtube_info()}), copy=self.no_copy)
+        outcome = retagger.process(path)
+        self.assertEqual(outcome.status, Status.UPDATED, outcome.message)
+        self.assertEqual(texts(path)["tven"], (ID,))
+
+    def test_a_copy_is_made_with_safe(self):
+        path = old_file(self.path())
+        retagger = self.retagger(
+            FakeSource({ID: youtube_info()}), copy=self.no_copy, safe=True
+        )
+        outcome = retagger.process(path)
+        self.assertEqual(outcome.status, Status.FAILED)
+        self.assertIn("a copy was made", outcome.message)
+        self.assertEqual(texts(path)["tven"], ("Old title",))
+
+    def test_the_file_stays_the_same_file(self):
+        path = old_file(self.path())
+        before = os.stat(path)
+        _ = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        after = os.stat(path)
+        self.assertEqual(after.st_ino, before.st_ino)
+        self.assertEqual(after.st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual(after.st_atime_ns, before.st_atime_ns)
+        self.assertEqual(stat.S_IMODE(after.st_mode), 0o640)
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(sorted(os.listdir(self.folder)), [f"{ID}.mp4"])
+
+    def test_a_hard_link_sees_the_new_tags(self):
+        path = old_file(self.path())
+        link = os.path.join(self.temp_dir(), "link.mp4")
+        os.link(path, link)
+        _ = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        self.assertEqual(texts(link)["tven"], (ID,))
+
+    def test_the_result_is_the_same_as_with_a_copy(self):
+        fast = old_file(self.path(f"{ID}.mp4"))
+        other = os.path.join(self.temp_dir(), f"{ID}.mp4")
+        _ = old_file(other)
+        source = FakeSource({ID: youtube_info()})
+        _ = self.retagger(source).process(fast)
+        _ = self.retagger(source, safe=True).process(other)
+        self.assertEqual(texts(fast), texts(other))
+        self.assertEqual(probe_file(fast), probe_file(other))
+
+    def test_the_media_data_is_untouched(self):
+        path = old_file(self.path())
+        before = probe_file(path)
+        packets = subprocess.run(
+            [
+                cast(str, FFMPEG),
+                *("-v", "error", "-i", path),
+                *("-map", "0:a", "-map", "0:v:0", "-c", "copy", "-f", "md5", "-"),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        _ = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        again = subprocess.run(
+            [
+                cast(str, FFMPEG),
+                *("-v", "error", "-i", path),
+                *("-map", "0:a", "-map", "0:v:0", "-c", "copy", "-f", "md5", "-"),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        self.assertEqual(again, packets)
+        self.assertEqual(probe_file(path), before)
+
+    def test_a_file_that_changed_before_the_write_is_left_alone(self):
+        path = old_file(self.path())
+
+        def touch(file: str) -> None:
+            # After the file was read, e.g. a download that is still going
+            with open(path, "ab") as f:
+                _ = f.write(b"more")
+
+        retagger = self.retagger(FakeSource({ID: youtube_info()}), probe=touch)
+        outcome = retagger.process(path)
+        self.assertEqual(outcome.status, Status.FAILED)
+        self.assertIn("changed while", outcome.message)
+        self.assertNotIn("damaged", outcome.message)
+        self.assertTrue(self.bytes_of(path).endswith(b"more"))
+        self.assertEqual(texts(path)["tven"], ("Old title",))
+
+    def test_a_failure_before_the_write_is_no_damage(self):
+        path = old_file(self.path())
+        before = self.bytes_of(path)
+        with mock.patch.object(
+            Retagger, "_Retagger__apply", side_effect=RuntimeError("no")
+        ):
+            outcome = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        self.assertEqual(outcome.status, Status.FAILED)
+        self.assertNotIn("damaged", outcome.message)
+        self.assertEqual(self.bytes_of(path), before)
+
+    def test_a_failed_check_says_the_file_may_be_damaged(self):
+        path = old_file(self.path())
+        mtime = os.stat(path).st_mtime_ns
+        with mock.patch.object(
+            Retagger,
+            "_Retagger__check",
+            side_effect=RuntimeError("the tag was not written"),
+        ):
+            outcome = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        self.assertEqual(outcome.status, Status.FAILED)
+        self.assertIn(
+            "the file may be damaged: the tag was not written", outcome.message
+        )
+        self.assertEqual(os.stat(path).st_mtime_ns, mtime)  # still restored
+
+    def test_a_failed_write_says_the_file_may_be_damaged(self):
+        path = old_file(self.path())
+        mtime = os.stat(path).st_mtime_ns
+        with mock.patch.object(MP4, "save", side_effect=OSError("disk full")):
+            outcome = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        self.assertEqual(outcome.status, Status.FAILED)
+        self.assertIn("may be damaged", outcome.message)
+        self.assertIn("disk full", outcome.message)
+        self.assertEqual(os.stat(path).st_mtime_ns, mtime)
+
+    def test_a_second_run_finds_the_file_current(self):
+        path = old_file(self.path())
+        _ = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        source = FakeSource({ID: youtube_info()})
+        self.assertEqual(self.retagger(source).process(path).status, Status.CURRENT)
+        self.assertEqual(source.requests, [])
+
+    def test_an_interrupt_waits_for_the_write(self):
+        path = old_file(self.path())
+        original = MP4.save
+        previous = signal.getsignal(signal.SIGINT)
+
+        def interrupted(mp4: MP4, *args: Any, **kwargs: Any) -> Any:
+            os.kill(os.getpid(), signal.SIGINT)
+            return original(mp4, *args, **kwargs)  # pyright: ignore
+
+        retagger = self.retagger(FakeSource({ID: youtube_info()}))
+        with (
+            mock.patch.object(MP4, "save", interrupted),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            _ = retagger.process(path)
+        # The write was done, and the handler of Ctrl-C is back
+        self.assertEqual(texts(path)["tven"], (ID,))
+        self.assertEqual(signal.getsignal(signal.SIGINT), previous)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_the_interrupt_handler_is_restored_after_a_failure(self):
+        previous = signal.getsignal(signal.SIGINT)
+        with (
+            self.assertRaises(ValueError),
+            retag._interrupt_after(),  # pyright: ignore[reportPrivateUsage]
+        ):
+            raise ValueError
+        self.assertEqual(signal.getsignal(signal.SIGINT), previous)
+
+    def test_no_signals_outside_the_main_thread(self):
+        done: list[str] = []
+
+        def work() -> None:
+            with retag._interrupt_after():  # pyright: ignore[reportPrivateUsage]
+                done.append("ran")
+
+        thread = threading.Thread(target=work)
+        thread.start()
+        thread.join()
+        self.assertEqual(done, ["ran"])
 
 
 @needs_ffmpeg
@@ -1356,6 +1579,69 @@ class TestRun(RetagTestCase):
         _ = self.retagger(self.source(ID)).run(self.folder)
         # A file without an id makes no request, so there is no pause for it
         self.assertEqual(self.pauses, [2.5, 2.5])  # the channel and its uploads
+
+    def slow_source(self, took: float, *ids: str) -> FakeSource:
+        """A source whose answers take time on the clock of the retagger."""
+        retag = self
+
+        class Slow(FakeSource):
+            def video(self, video_id: str) -> Mapping[str, object]:
+                retag.now += took
+                return super().video(video_id)
+
+        return Slow({i: youtube_info(i) for i in ids})
+
+    def test_the_time_a_request_took_counts_for_the_pause(self):
+        self.make(f"{ID}.mp4", f"{OTHER}.mp4")
+        source = self.slow_source(2.0, ID, OTHER)
+        _ = self.retagger(source, sleep=3.0).run(self.folder)
+        # Only what is left of the interval is waited: 1 s after a video that
+        # took 2 s (before the channel), then the full interval before its
+        # uploads and before the second video
+        self.assertEqual(self.pauses, [1.0, 3.0, 3.0])
+
+    def test_no_pause_when_the_interval_has_passed(self):
+        self.make(f"{ID}.mp4", f"{OTHER}.mp4")
+        source = self.slow_source(5.0, ID, OTHER)
+        _ = self.retagger(source, sleep=3.0).run(self.folder)
+        # The video took longer than the interval, so the channel follows at
+        # once; only the uploads and the second video wait for the interval
+        self.assertEqual(self.pauses, [3.0, 3.0])
+
+    def test_the_work_on_a_file_counts_too(self):
+        retag = self
+        self.make(f"{ID}.mp4", f"{OTHER}.mp4")
+
+        def probe(_: str) -> None:
+            retag.now += 10.0  # a long copy or probe
+
+        source = self.source(ID, OTHER)
+        _ = self.retagger(source, probe=probe).run(self.folder)
+        # The second video starts more than an interval after the first
+        self.assertEqual(sorted(source.requests), sorted([ID, OTHER]))
+        self.assertEqual(self.pauses, [2.5, 2.5])  # the channel and its uploads
+
+    def test_a_clock_that_goes_back_does_not_make_a_long_pause(self):
+        self.make(f"{ID}.mp4", f"{OTHER}.mp4")
+        retag = self
+
+        class Back(FakeSource):
+            def video(self, video_id: str) -> Mapping[str, object]:
+                retag.now -= 500.0
+                return super().video(video_id)
+
+        source = Back({i: youtube_info(i) for i in (ID, OTHER)})
+        _ = self.retagger(source, sleep=3.0).run(self.folder)
+        self.assertTrue(self.pauses)
+        self.assertTrue(all(p <= 3.0 for p in self.pauses))
+
+    def test_the_first_request_is_not_delayed(self):
+        self.make(f"{ID}.mp4")
+        source = self.slow_source(0.0, ID)
+        _ = self.retagger(source, sleep=3.0).run(self.folder)
+        self.assertEqual(source.requests, [ID])
+        self.assertEqual(self.pauses[:1], [3.0])  # before the channel, not the video
+        self.assertEqual(self.now, 1000.0 + sum(self.pauses))
 
     def test_subfolders_and_no_recursive(self):
         self.make("top.mp4")
@@ -1724,12 +2010,15 @@ class TestMain(IsolatedTestCase):
             (
                 arguments.dry_run,
                 arguments.force,
+                arguments.safe,
                 arguments.sleep,
                 arguments.tolerance,
                 arguments.limit,
             ),
-            (False, False, 3.0, 5.0, None),
+            (False, False, False, 3.0, 5.0, None),
         )
+        arguments = retag.parser().parse_args(["x", "--safe"], namespace=Arguments())
+        self.assertTrue(arguments.safe)
 
     @needs_ffmpeg
     def test_a_dry_run_end_to_end(self):

@@ -93,11 +93,16 @@ looked up on YouTube, and only used if its id matches and its duration is that o
 
 - **Start with `--dry-run`**, which shows each tag that would change, and `--limit 3` to try it on a
   few files.
-- The streams are never touched. The tags are written to a copy that is read back and checked
-  (every tag as planned, all others and the streams unchanged) before it replaces the file. A
-  failure leaves the file as it was. The copy keeps the modification time, the permissions and, on
-  macOS, the extended attributes (Finder tags). Its creation date is new. It needs room for one copy
-  of the file in the same folder (on APFS a clone, which takes almost no space).
+- The streams are never touched. By default the tags are written to the file itself, which is the
+  fastest and needs no free space. The file is read back and checked afterwards (every tag as
+  planned, all others and the streams unchanged), and its modification time is restored. When the
+  new tags need more room, the data after them is moved, so a write that is interrupted (a crash, a
+  full disk, an unplugged drive) can damage the file; it is then reported as "the file may be
+  damaged". Ctrl-C waits until the file being written is finished.
+- With `--safe` the tags are written to a copy that is checked and then replaces the file, so a
+  failure leaves the file as it was. That is slower and needs room for a copy in the same folder
+  (on APFS a clone, which takes almost no space). The copy keeps the modification time, the
+  permissions and, on macOS, the extended attributes (Finder tags), but its creation date is new.
 - The episode number (`tves`) is the position of the video among all the uploads of its channel,
   see below: the first video of the channel is 1. The list of the uploads is fetched once for each
   channel (about one request per 100 videos), and `EPISODE_ORDER` is written to say how the number
@@ -111,9 +116,10 @@ looked up on YouTube, and only used if its id matches and its duration is that o
   without a request, so an interrupted run can be repeated. `--force` checks them again. Files
   from earlier versions of ViDL, whose numbers were counted in another way, have no
   `EPISODE_ORDER` and are therefore done again.
-- YouTube is asked slowly (`--sleep`, 3 seconds), and the channel description once per channel
-  (`--no-channel-description` leaves it out). The run stops when YouTube restricts the requests
-  (bot check, rate limit, five restricted answers in a row) or when the network is down. Cookies
+- YouTube is asked slowly: requests start at least `--sleep` seconds (default 3) apart. The time a
+  request and the work on a file take counts, so only what is left of the interval is waited. The channel description is fetched once per
+  channel (`--no-channel-description` leaves it out). The run stops when YouTube restricts the
+  requests (bot check, rate limit, five restricted answers in a row) or when the network is down. Cookies
   come from `--cookies-from-browser` or `General.cookie_browser` of `--config` (default
   `config.ini` in the current folder, which is only read).
 - Symbolic links, hidden files and files that are no readable mp4 are skipped.

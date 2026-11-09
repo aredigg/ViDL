@@ -88,8 +88,11 @@ python -m vidl.retag FOLDER
 Rewrites the tags of the `mp4` and `m4v` files of YouTube videos in a folder (and its subfolders)
 to the format of new downloads, see `metadata` below. The video id is taken from the `tven` tag, or
 from the file name when `tven` holds no id (older versions wrote the title there). The video is
-looked up on YouTube, and only used if its id matches and its duration is that of the file (within
-`--tolerance`, 5 seconds or 2%).
+looked up on YouTube, and only used if YouTube answers with that id. A duration that differs from
+that of the file (more than `--tolerance`, 5 seconds or 2%) gives a warning below the file, but the
+file is tagged as usual, as videos are shortened or edited after they were downloaded. When `tven`
+and the file name hold different ids, the one whose duration matches is preferred. Warnings are
+counted in the summary and do not change the exit status.
 
 - **Start with `--dry-run`**, which shows each tag that would change, and `--limit 3` to try it on a
   few files.

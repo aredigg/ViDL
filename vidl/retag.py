@@ -22,7 +22,10 @@ Speed and safety:
   keeps the modification time and permissions, and on macOS the extended
   attributes (Finder tags), as "cp -p" does. Its creation date is new.
 - A file is only changed when YouTube's answer is for the same video, that is
-  its id matches and its duration is that of the file (within a tolerance).
+  its id matches. A duration that differs from that of the file (beyond a
+  tolerance) is only a warning, as videos are shortened or edited later; when
+  tven and the file name hold different ids, the one with the duration of the
+  file is preferred.
 - The new file (the copy before it replaces the file) is read back: every tag
   must be as planned, all other tags (such as the cover) unchanged, and the
   streams, checked with ffprobe, the same. The file must also not have changed
@@ -526,6 +529,7 @@ class Outcome:
     status: Status
     message: str = ""
     changes: tuple[Change, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass
@@ -533,6 +537,7 @@ class Summary:
     counts: Counter[Status] = field(default_factory=lambda: Counter[Status]())
     aborted: str | None = None
     limited: bool = False
+    warnings: int = 0  # the files with a warning
 
 
 class Aborted(Exception):
@@ -618,6 +623,7 @@ class Retagger:
                 summary.aborted = str(e)
                 break
             summary.counts[outcome.status] += 1
+            summary.warnings += 1 if outcome.warnings else 0
             self.__report(number, len(paths), folder, outcome)
             if self.__limit is not None and self.__fetched >= self.__limit:
                 summary.limited = number < len(paths)
@@ -651,7 +657,7 @@ class Retagger:
             return Outcome(path, Status.CURRENT, "already in the current format")
         length = float(mp4.info.length)
         probe = self.__probe(path)
-        info = self.__fetch(ids, length)
+        info, warnings = self.__fetch(ids, length)
         episode, order = self.__episode(info, tags)
         context = MetadataContext(
             episode_number=episode,
@@ -672,19 +678,30 @@ class Retagger:
         target = target_atoms(video)
         changes = tuple(plan_changes(tags, target))
         if not changes:
-            return Outcome(path, Status.UNCHANGED, "the tags are as they should be")
+            return Outcome(
+                path, Status.UNCHANGED, "the tags are as they should be", (), warnings
+            )
         text = f"{len(changes)} tag{'s' if len(changes) != 1 else ''}"
         if self.__dry_run:
-            return Outcome(path, Status.WOULD_UPDATE, text, changes)
+            return Outcome(path, Status.WOULD_UPDATE, text, changes, warnings)
         if self.__safe:
             self.__replace(path, before, tags, target, probe, length)
         else:
             self.__rewrite(path, before, tags, target, probe, length)
-        return Outcome(path, Status.UPDATED, text, changes)
+        return Outcome(path, Status.UPDATED, text, changes, warnings)
 
-    def __fetch(self, ids: list[str], length: float) -> Mapping[str, object]:
-        """The info of the first id that is the video of the file."""
+    def __fetch(
+        self, ids: list[str], length: float
+    ) -> tuple[Mapping[str, object], tuple[str, ...]]:
+        """The info of the video of the file, and the warnings about it.
+
+        The id says which video it is. A duration that differs from that of the
+        file is no reason to leave the file alone, as videos are shortened or
+        edited after they were downloaded: it is a warning. When there are two
+        ids (tven and the file name) and only one has the duration of the file,
+        that one is taken. Otherwise the first video that was found is."""
         problems: list[str] = []
+        different: tuple[Mapping[str, object], str] | None = None
         self.__fetched += 1
         for video_id in ids:
             self.__throttle()
@@ -702,12 +719,16 @@ class Retagger:
             if isinstance(duration, (int, float)) and not isinstance(duration, bool):
                 allowed = max(self.__tolerance, 0.02 * float(duration))
                 if abs(float(duration) - length) > allowed:
-                    problems.append(
-                        f"{video_id}: the video is {_clock(float(duration))} long, "
-                        + f"the file {_clock(length)}"
-                    )
+                    if different is None:
+                        different = (
+                            info,
+                            f"the video is {_clock(float(duration))} long on "
+                            + f"YouTube, the file {_clock(length)}",
+                        )
                     continue
-            return info
+            return info, ()
+        if different is not None:
+            return different[0], (different[1],)
         raise _Skip("; ".join(problems))
 
     # YouTube is asked slowly: the requests start at least `sleep` seconds
@@ -919,6 +940,8 @@ class Retagger:
         if outcome.message:
             line += f"  ({outcome.message})"
         self.__write(line)
+        for warning in outcome.warnings:
+            self.__write(f"      warning: {warning}")
         if self.__verbose or self.__dry_run:
             for change in outcome.changes:
                 self.__write(f"      {change}")
@@ -1045,7 +1068,8 @@ def parser() -> argparse.ArgumentParser:
         default=5.0,
         metavar="SECONDS",
         help="the largest difference between the duration of the file and of the "
-        + "video (or 2%%, whichever is more, default: %(default)s)",
+        + "video (or 2%%, whichever is more) that is not warned about "
+        + "(default: %(default)s)",
     )
     _ = result.add_argument(
         "--limit",
@@ -1124,6 +1148,8 @@ def main(
         if callable(close):
             _ = cast("Callable[[], object]", close)()
     parts = [f"{summary.counts[s]} {s.value}" for s in Status if summary.counts[s]]
+    if summary.warnings:
+        parts.append(f"{summary.warnings} with a warning")
     print("Done: " + (", ".join(parts) if parts else "no mp4 or m4v files found"))
     if summary.limited:
         print("Stopped at the limit, more files were left")

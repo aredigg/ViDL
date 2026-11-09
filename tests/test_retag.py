@@ -766,39 +766,155 @@ class TestRetagFile(RetagTestCase):
         self.assertEqual(source.requests, [])
         self.assertEqual(self.bytes_of(path), before)
 
-    def test_a_different_duration_is_skipped(self):
+    def test_a_different_duration_is_a_warning_and_the_file_is_tagged(self):
+        path = old_file(self.path())
+        source = FakeSource({ID: youtube_info(duration=754)})
+        outcome = self.retagger(source).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED, outcome.message)
+        self.assertEqual(len(outcome.warnings), 1)
+        self.assertIn("12:34", outcome.warnings[0])
+        self.assertIn("0:02", outcome.warnings[0])
+        self.assertEqual(texts(path)["tven"], (ID,))
+        self.assertEqual(texts(path)["©nam"], ("The title",))
+
+    def test_a_file_longer_than_the_video_is_tagged_too(self):
+        # The video was shortened on YouTube
+        path = old_file(self.path())
+        source = FakeSource({ID: youtube_info(duration=1)})
+        retagger = self.retagger(source, tolerance=0.0)
+        outcome = retagger.process(path)
+        self.assertEqual(outcome.status, Status.UPDATED, outcome.message)
+        self.assertEqual(len(outcome.warnings), 1)
+
+    def test_a_different_duration_in_a_dry_run(self):
         path = old_file(self.path())
         before = self.bytes_of(path)
         source = FakeSource({ID: youtube_info(duration=754)})
-        outcome = self.retagger(source).process(path)
-        self.assertEqual(outcome.status, Status.SKIPPED)
-        self.assertIn("12:34", outcome.message)
-        self.assertIn("0:02", outcome.message)
+        outcome = self.retagger(source, dry_run=True).process(path)
+        self.assertEqual(outcome.status, Status.WOULD_UPDATE)
+        self.assertEqual(len(outcome.warnings), 1)
         self.assertEqual(self.bytes_of(path), before)
 
+    def test_a_different_duration_with_safe_copies(self):
+        path = old_file(self.path())
+        source = FakeSource({ID: youtube_info(duration=754)})
+        outcome = self.retagger(source, safe=True).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED, outcome.message)
+        self.assertEqual(len(outcome.warnings), 1)
+        self.assertEqual(texts(path)["tven"], (ID,))
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_different_duration_with_nothing_to_change(self):
+        path = old_file(self.path())
+        _ = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        source = FakeSource({ID: youtube_info(duration=754)})
+        outcome = self.retagger(source, force=True).process(path)
+        self.assertEqual(outcome.status, Status.UNCHANGED)
+        self.assertEqual(len(outcome.warnings), 1)
+
+    def test_no_warning_without_a_duration(self):
+        path = old_file(self.path())
+        info = youtube_info()
+        del info["duration"]
+        outcome = self.retagger(FakeSource({ID: info})).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED)
+        self.assertEqual(outcome.warnings, ())
+
+    def test_a_current_file_is_not_asked_so_there_is_no_warning(self):
+        path = old_file(self.path())
+        _ = self.retagger(FakeSource({ID: youtube_info()})).process(path)
+        source = FakeSource({ID: youtube_info(duration=754)})
+        outcome = self.retagger(source).process(path)
+        self.assertEqual(outcome.status, Status.CURRENT)
+        self.assertEqual(outcome.warnings, ())
+
     def test_the_duration_tolerance(self):
-        for duration, status in (
-            (2, Status.UPDATED),
-            (6.9, Status.UPDATED),  # within 5 seconds
-            (7.5, Status.SKIPPED),
+        for duration, warned in (
+            (2, False),
+            (6.9, False),  # within 5 seconds
+            (7.5, True),
         ):
             with self.subTest(duration=duration):
                 path = old_file(self.path(f"{ID}.mp4"))
                 source = FakeSource({ID: youtube_info(duration=duration)})
-                self.assertEqual(self.retagger(source).process(path).status, status)
+                outcome = self.retagger(source).process(path)
+                self.assertEqual(outcome.status, Status.UPDATED)
+                self.assertEqual(bool(outcome.warnings), warned)
         path = old_file(self.path(f"{ID}.mp4"))
         wide = self.retagger(FakeSource({ID: youtube_info(duration=40)}), tolerance=60)
-        self.assertEqual(wide.process(path).status, Status.UPDATED)
+        outcome = wide.process(path)
+        self.assertEqual(outcome.status, Status.UPDATED)
+        self.assertEqual(outcome.warnings, ())
 
     def test_a_long_video_allows_two_percent(self):
         retagger = self.retagger(FakeSource({ID: youtube_info(duration=1019)}))
         fetch = retagger._Retagger__fetch  # pyright: ignore[reportAttributeAccessIssue]
-        self.assertEqual(fetch([ID], 1000.0)["id"], ID)  # 19 s is less than 2%
+        info, warnings = fetch([ID], 1000.0)  # 19 s is less than 2%
+        self.assertEqual((info["id"], warnings), (ID, ()))
         retagger = self.retagger(FakeSource({ID: youtube_info(duration=1021)}))
         fetch = retagger._Retagger__fetch  # pyright: ignore[reportAttributeAccessIssue]
-        with self.assertRaises(Exception) as caught:
-            _ = fetch([ID], 1000.0)
-        self.assertIn("17:01", str(caught.exception))  # 21 s is more
+        info, warnings = fetch([ID], 1000.0)  # 21 s is more
+        self.assertEqual(info["id"], ID)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("17:01", warnings[0])
+
+    def test_the_id_with_the_duration_of_the_file_is_preferred(self):
+        # tven names another video, the file name is the right one
+        path = old_file(self.path(), tven=OTHER)
+        source = FakeSource(
+            {OTHER: youtube_info(OTHER, duration=900), ID: youtube_info()}
+        )
+        outcome = self.retagger(source).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED)
+        self.assertEqual(outcome.warnings, ())
+        self.assertEqual(source.requests, [OTHER, ID])
+
+    def test_the_first_id_is_taken_when_none_has_the_duration(self):
+        path = old_file(self.path(), tven=OTHER)
+        source = FakeSource(
+            {
+                OTHER: youtube_info(OTHER, duration=900),
+                ID: youtube_info(duration=800),
+            }
+        )
+        outcome = self.retagger(source).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED)
+        self.assertEqual(len(outcome.warnings), 1)
+        self.assertIn("15:00", outcome.warnings[0])
+        self.assertEqual(texts(path)["tven"], (OTHER,))
+
+    def test_the_first_id_is_taken_when_the_second_is_unavailable(self):
+        path = old_file(self.path(), tven=OTHER)
+        source = FakeSource(
+            {OTHER: youtube_info(OTHER, duration=900), ID: failure("Video unavailable")}
+        )
+        outcome = self.retagger(source).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED)
+        self.assertEqual(len(outcome.warnings), 1)
+        self.assertEqual(texts(path)["tven"], (OTHER,))
+
+    def test_a_matching_first_id_needs_no_second_request(self):
+        path = old_file(self.path(), tven=ID)
+        source = FakeSource({ID: youtube_info(), OTHER: youtube_info(OTHER)})
+        _ = self.retagger(source).process(path)
+        self.assertEqual(source.requests, [ID])
+
+    def test_a_different_video_is_still_not_taken_whatever_the_duration(self):
+        # YouTube answers with another id than the one asked for
+        path = old_file(self.path())
+        source = FakeSource({ID: youtube_info(OTHER, duration=2)})
+        outcome = self.retagger(source).process(path)
+        self.assertEqual(outcome.status, Status.SKIPPED)
+        self.assertEqual(outcome.warnings, ())
+
+    def test_a_failed_file_has_no_warning_and_no_change(self):
+        path = old_file(self.path())
+        before = self.bytes_of(path)
+        source = FakeSource({ID: failure("Private video")})
+        outcome = self.retagger(source).process(path)
+        self.assertEqual(outcome.status, Status.SKIPPED)
+        self.assertEqual(outcome.warnings, ())
+        self.assertEqual(self.bytes_of(path), before)
 
     def test_another_video_answered_is_skipped(self):
         path = old_file(self.path())
@@ -1654,6 +1770,35 @@ class TestRun(RetagTestCase):
         summary = self.retagger(source).run(self.folder)
         self.assertEqual(summary.counts[Status.UPDATED], 1)
 
+    def test_a_warning_is_shown_with_the_file_and_counted(self):
+        self.make(f"{ID}.mp4", f"{OTHER}.mp4")
+        source = FakeSource(
+            {ID: youtube_info(duration=754), OTHER: youtube_info(OTHER)}
+        )
+        summary = self.retagger(source).run(self.folder)
+        self.assertEqual(summary.counts[Status.UPDATED], 2)
+        self.assertEqual(summary.warnings, 1)
+        self.assertIsNone(summary.aborted)
+        lines = self.output
+        shown = [i for i, line in enumerate(lines) if line.startswith("      warning:")]
+        self.assertEqual(len(shown), 1)
+        # Directly under the file it is about
+        self.assertIn(f"{ID}.mp4", lines[shown[0] - 1])
+        self.assertIn("12:34", lines[shown[0]])
+
+    def test_warnings_are_shown_without_verbose(self):
+        self.make(f"{ID}.mp4")
+        source = FakeSource({ID: youtube_info(duration=754)})
+        _ = self.retagger(source, verbose=False).run(self.folder)
+        self.assertTrue(any("warning:" in line for line in self.output))
+        self.assertFalse(any("tven:" in line for line in self.output))
+
+    def test_no_warning_for_matching_files(self):
+        self.make(f"{ID}.mp4")
+        summary = self.retagger(self.source(ID)).run(self.folder)
+        self.assertEqual(summary.warnings, 0)
+        self.assertFalse(any("warning" in line for line in self.output))
+
     def test_a_dry_run_lists_the_changes(self):
         self.make(f"{ID}.mp4")
         summary = self.retagger(self.source(ID), dry_run=True).run(self.folder)
@@ -2019,6 +2164,19 @@ class TestMain(IsolatedTestCase):
         )
         arguments = retag.parser().parse_args(["x", "--safe"], namespace=Arguments())
         self.assertTrue(arguments.safe)
+
+    @needs_ffmpeg
+    def test_a_warning_gives_status_0_and_is_in_the_summary(self):
+        folder = self.temp_dir()
+        path = old_file(os.path.join(folder, f"{ID}.mp4"))
+        source = FakeSource({ID: youtube_info(duration=754)})
+        status, out, errors = self.run_main(
+            folder, "--sleep", "0", "--cookies-from-browser", "none", source=source
+        )
+        self.assertEqual(status, 0, errors)
+        self.assertIn("warning: the video is 12:34 long on YouTube", out)
+        self.assertIn("Done: 1 updated, 1 with a warning", out)
+        self.assertEqual(texts(path)["tven"], (ID,))
 
     @needs_ffmpeg
     def test_a_dry_run_end_to_end(self):

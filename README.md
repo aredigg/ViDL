@@ -43,6 +43,9 @@ On the first run a default configuration is written. Set `Paths.output` and run 
 | `c`               | Finish the running downloads, then quit. No new downloads are started, and the pause after a download is skipped. Press `c` again to continue normally, or `q` to quit at once |
 | `a`               | Add a channel or playlist, see below             |
 
+The last line of the header shows the keys as `[Q] Quit | [C] Complete | [A] Add`. `[C] Complete`
+lets the running downloads complete, and then quits (see the table).
+
 `SIGTERM` also triggers a graceful shutdown. Keyboard input is only read when standard input is
 a terminal. Pasted text is never taken as key commands.
 
@@ -60,11 +63,28 @@ running, so changes made to it by hand are lost.
 
 ### Header
 
-The header shows the time and uptime, free space on the download and temporary directories (a
-single entry when both are on the same disk, colored below 10% and 2% free), the network status,
-and the yt-dlp version with available updates. When the terminal is narrow, the yt-dlp version is
-left out first, then the network status. A pending quit (`c`) or a suspension is shown below the
-title, and the key hints, prompt or the result of a command on the last line.
+The header shows the time and the uptime (`HH:MM′` in hours, also beyond a day, `MM′SS″` below an
+hour), free space on the download (`d`) and temporary (`t`) directories (a single `d/t` entry when
+both are on the same disk, colored below 10% and 2% free), the network status, and the yt-dlp
+version with available updates, separated by `|`. When the terminal is narrow, the yt-dlp version
+is left out first, then the network status. The last line has the key hints, the prompt or the
+result of a command. Below the title, the states that last are shown, separated by `|`:
+
+- `Completing 2`: after `c`, the number of downloads that are still running
+- `Suspended → 14:05`: all slots are suspended until that time, see below
+- `Slot 2 alone`: a large download runs alone, the other slots wait
+- `Slot 2 waiting`: slot 2 waits for the running downloads to finish before a large download
+
+The network status is a symbol, and not shown when `General.network_check` is off. With
+`General.nerd_fonts` these are Nerd Font glyphs, otherwise a globe with a mark. A degraded network
+(three or more errors of the downloads in ten minutes) is followed by the number of errors.
+
+| State                      | Nerd Font        | Plain |
+|----------------------------|------------------|-------|
+| online                     | `󰱔` | `🌐 ✓` |
+| offline                    | `󰱟` | `🌐 ✕` |
+| degraded                   | `󰲚` | `🌐 !` |
+| unknown, not checked yet   | `󰲊` | `🌐 ?` |
 
 ### Errors and suspension
 

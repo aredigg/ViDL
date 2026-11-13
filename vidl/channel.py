@@ -441,7 +441,7 @@ class Channel:
                     return False
                 process_time = int(time())
                 self.__set_metadata_context(
-                    True, self.__prepare_episode(queue, info, playlist_index)
+                    True, self.__episode_of(Item.get_str(info, "id"))
                 )
                 try:
                     ret = self.__download(processor, queue, info)
@@ -523,26 +523,8 @@ class Channel:
 
     # The number of the video in its channel or playlist (see episodes.py), asked
     # for when the video is about to be downloaded, which is when the list of
-    # the uploads of a channel is fetched, once. The panel shows it as well.
-    def __prepare_episode(
-        self, queue: Queue[Message], info: Mapping[str, object], playlist_index: int
-    ) -> tuple[int, str] | None:
-        episode = self.__episode_of(Item.get_str(info, "id"))
-        if episode is not None and self.__slot_index is not None:
-            queue.put(
-                EntityMessage(
-                    index=self.__slot_index,
-                    provider=Message.Provider.CHANNEL,
-                    entity=Item.get_entity(
-                        info=cast(dict[str, object], info),
-                        name="",
-                        index=playlist_index,
-                        episode=episode[0],
-                    ),
-                )
-            )
-        return episode
-
+    # the uploads of a channel is fetched, once. It is only written to the file,
+    # the panel has its own numbering.
     def __episode_of(self, video_id: str) -> tuple[int, str] | None:
         if self.__episodes is None or not video_id:
             return None

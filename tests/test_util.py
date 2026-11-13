@@ -19,13 +19,13 @@ class TestFormatSeconds(unittest.TestCase):
         self.assertEqual(Util.format_seconds(3725), "01:03′")
         self.assertEqual(Util.format_seconds(3720), "01:02′")
 
-    def test_uptime(self):
-        self.assertEqual(Util.format_uptime(0), "00:00:00")
-        self.assertEqual(Util.format_uptime(3725.9), "01:02:05")
-        self.assertEqual(Util.format_uptime(86_399), "23:59:59")
-        self.assertEqual(Util.format_uptime(86_400), "1d 00:00:00")
-        self.assertEqual(Util.format_uptime(2 * 86_400 + 3723), "2d 01:02:03")
-        self.assertEqual(Util.format_uptime(-5), "00:00:00")
+    def test_days_are_not_a_unit_only_hours_are(self):
+        self.assertEqual(Util.format_seconds(86_400), "24:00′")
+        self.assertEqual(Util.format_seconds(2 * 86_400 + 3723), "49:03′")
+        self.assertEqual(Util.format_seconds(100 * 3600), "100:00′")
+
+    def test_there_is_one_way_to_format_a_duration(self):
+        self.assertFalse(hasattr(Util, "format_uptime"))
 
     def test_three_parts(self):
         self.assertEqual(Util.format_seconds(3725, two_parts=False), "01:02:05")

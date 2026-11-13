@@ -10,9 +10,9 @@ class Controls:
 
     Pasted text never runs shortcuts, it is only used by a prompt."""
 
-    HINTS: str = "q quit · c finish downloads and quit · a add channel"
+    HINTS: str = "[Q] Quit | [C] Complete | [A] Add"
     ADD_LABEL: str = "Add channel"
-    PROMPT_HINT: str = "enter add · esc cancel"
+    PROMPT_HINT: str = "[Enter] Add | [Esc] Cancel"
 
     class Mode(Enum):
         COMMAND = auto()

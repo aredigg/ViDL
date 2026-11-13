@@ -1209,7 +1209,8 @@ class TestMetadata(ChannelTestCase):
         self.download(infos)
         self.assertEqual(self.episodes(), {"a": None})
 
-    def test_the_panel_shows_the_episode_before_the_download(self):
+    def test_the_panel_gets_one_entity_for_each_video_and_no_episode(self):
+        # The episode is only written to the file, the panel numbers the list
         urls = ["https://v/a", "https://v/b"]
         infos: dict[str, object] = {
             "https://c": self.channel_info(urls),
@@ -1218,12 +1219,11 @@ class TestMetadata(ChannelTestCase):
             **self.uploads("a", "b"),
         }
         self.download(infos)
-        shown = {
-            m.entity.id: m.entity.episode
-            for m in self.messages(EntityMessage)
-            if m.entity.episode
-        }
-        self.assertEqual(shown, {"a": 2, "b": 1})
+        entities = [
+            m.entity for m in self.messages(EntityMessage) if m.entity.id in ("a", "b")
+        ]
+        self.assertEqual([e.id for e in entities], ["a", "b"])
+        self.assertFalse(any(hasattr(e, "episode") for e in entities))
 
     def test_no_episodes_without_metadata(self):
         Config.settings["Download"]["metadata"] = False
@@ -1235,9 +1235,6 @@ class TestMetadata(ChannelTestCase):
         }
         processor = self.download(infos)
         self.assertNotIn(UPLOADS_URL, processor.extracted)
-        self.assertEqual(
-            [m for m in self.messages(EntityMessage) if m.entity.episode], []
-        )
 
     def test_a_single_video_has_no_episode(self):
         self.download({"https://c": video("vid", channel="Chan")})

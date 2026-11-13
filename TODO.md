@@ -1,5 +1,17 @@
 # TODO List
 
+- [x] Uancepptable overreach by Claude to be fixed: (all reverted or fixed below)
+  - [x] Episode number fix which was only for metadata is now also propagated to the playlist entry in the UI, must be reverted: the panel numbers the list as before (`playlist length - position + 1`), the episode number from the uploads list is only written to the file (`Entity.episode` removed)
+  - [x] Uptime using wrong time format, the correct method was already in util `format_seconds` and does the correct formatting, while `format_uptime` is utterly wrong, also we only uses hours, and not days. : now `Util.format_seconds`, `format_uptime` removed, hours only
+  - [x] In the status, we only use data, not words, unless absolutely necessary, follwing should be removed:
+    - [x]  `up`, could be replaced by a bar `|` : time and uptime are two segments, separated by `|`
+    - [x] `dl` shortened to `d`, and `tmp` could be `t`: `d`, `t` and `d/t` for both on one disk
+    - [x] word `free` is not necessary, must be removed
+    - [x] the network state should use symbols, we should have option with nerd fonts and without, where online is `󰱔`, offline is `󰱟`, unceretain `󰲊` and degraded `󰲚`, and without `☑` `☒` `☐`. Or `🌐` with `✓` `✕` `!` or `?` respectively. : `General.nerd_fonts` selects the glyphs, otherwise the globe with `✓` `✕` `!` `?` (online, offline, degraded, unknown). A degraded network is followed by the number of errors, nothing is shown when `General.network_check` is off
+    - [x] introduction of a new separator `·` is not acceptable, we have to be consistent and `|` works just fine.: `|` everywhere (`View.SEGMENT_SEPARATOR`, also between the statuses below the title)
+    - [x] for help for the keys, it should be `[Q] Quit | [C] Complete | [A] Add` and detailed description could be put in the readme: the keys are `[Q] Quit | [C] Complete | [A] Add`, the prompt `[Enter] Add | [Esc] Cancel`, the details are in the README
+    - [x] Just a reminder that while it uses english, it is not an english first project, and literals should be sparingly: noted. The messages below the title are short now: `Completing 2`, `Suspended → 14:05`, `Slot 2 alone`, `Slot 2 waiting`, and the notice for a wrong URL is `Not an http(s) URL: …`
+
 - [x] metadata, written to new downloads only (`vidl/metadata.py`). Every tag is covered by tests on a real mp4 (ffmpeg and mutagen), and a download through `Slot`, `Channel` and a real yt-dlp on a local file was checked by hand
   - [x] ©nam title, ©gen genre, tves episode: unchanged
   - [x] ©art / aART / ©alb / tvsh: all the channel name

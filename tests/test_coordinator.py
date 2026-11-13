@@ -271,7 +271,7 @@ class TestMonitor(CoordinatorTestCase):
         Coordinator().run()
         (monitor,) = FakeMonitor.instances
         self.assertTrue(monitor.started and monitor.halted and monitor.joined)
-        self.assertEqual(monitor.paths, [("dl", "/out"), ("tmp", "/tmp/vidl-x")])
+        self.assertEqual(monitor.paths, [("d", "/out"), ("t", "/tmp/vidl-x")])
         self.assertEqual((monitor.update_check, monitor.network_check), (False, True))
 
     def test_monitor_is_not_started_without_channels(self):
@@ -451,7 +451,7 @@ class TestDrain(CoordinatorTestCase):
         self.assertEqual(FakeSlot.processed, ["https://a"])
         self.assertTrue(self.shared().drain_event.is_set())
         statuses = [m.status for m in self.messages(HeaderMessage)]
-        self.assertTrue(any(s.startswith("Finishing 1 download,") for s in statuses))
+        self.assertIn("Completing 1", statuses)
         self.assertTrue(all(s.halted for s in FakeSlot.instances))
 
     def test_quits_at_once_when_nothing_is_running(self):
@@ -510,7 +510,24 @@ class TestSuspension(CoordinatorTestCase):
         self.assertEqual(sorted(m.index for m in sleeps), [0, 1])
         self.assertTrue(all(m.required and m.sleep_time > 0 for m in sleeps))
         headers = [m for m in messages if isinstance(m, HeaderMessage)]
-        self.assertTrue(headers[0].status.startswith("Suspended until"))
+        self.assertRegex(headers[0].status, r"^Suspended \u2192 \d\d:\d\d$")
+
+    def test_statuses_in_the_header_are_separated_by_a_bar(self):
+        coordinator = Coordinator()
+        shared = cast(Shared, FakeSlot.instances[0].shared)
+        shared.suspension.report_restriction(0)
+        shared.suspension.report_restriction(1)
+        shared.gate.acquire_exclusive(1, threading.Event(), threading.Event())
+        self.addCleanup(shared.gate.release, 1)
+        self.quit_later(0.3)
+        self.assertEqual(coordinator.run(), 0)
+        combined = [m.status for m in self.messages(HeaderMessage) if " | " in m.status]
+        self.assertTrue(combined)
+        self.assertRegex(
+            combined[0],
+            r"^Suspended \u2192 \d\d:\d\d \| Slot 2 alone$",
+        )
+        self.assertFalse(any("·" in m.status for m in self.messages(HeaderMessage)))
 
     def test_channels_start_again_when_the_suspension_ends(self):
         coordinator = Coordinator()
@@ -541,7 +558,7 @@ class TestLargeDownload(CoordinatorTestCase):
         self.addCleanup(gate.release, 1)
         self.quit_later(0.3)
         self.assertEqual(coordinator.run(), 0)
-        self.assertIn("Large download in slot 2, others wait", self.statuses())
+        self.assertIn("Slot 2 alone", self.statuses())
 
     def test_the_header_names_the_slot_waiting_for_the_others(self):
         coordinator = Coordinator()
@@ -561,10 +578,7 @@ class TestLargeDownload(CoordinatorTestCase):
         self.quit_later(0.3)
         self.assertEqual(coordinator.run(), 0)
         (text,) = {s for s in self.statuses() if s}
-        self.assertEqual(
-            text,
-            "Slot 2 waits for the running downloads to finish before a large download",
-        )
+        self.assertEqual(text, "Slot 2 waiting")
 
     def test_no_status_without_a_large_download(self):
         coordinator = Coordinator()
@@ -640,7 +654,7 @@ class TestAddChannel(CoordinatorTestCase):
                 self.run_with(AddChannelCommand(text))
                 self.assertEqual(len(ChannelHelper.load_channels(self.file)), 1)
                 ((notice, error),) = self.notices()
-                self.assertTrue(error and notice.startswith("Not added"))
+                self.assertTrue(error and notice.startswith("Not an http(s) URL: "))
 
     def test_an_extra_slot_is_started_when_allowed(self):
         Config.settings["Channels"]["slots"] = 2

@@ -23,6 +23,7 @@ from .shared import Shared
 from .slot import Slot
 from .suspension import Suspension
 from .util import Util
+from .view import View
 from .view_controller import ViewController
 
 
@@ -79,8 +80,8 @@ class Coordinator:
         return Monitor(
             publish=self.__publish_system_status,
             paths=[
-                ("dl", str(paths["output"] or "")),
-                ("tmp", str(paths["temporary"] or "")),
+                ("d", str(paths["output"] or "")),
+                ("t", str(paths["temporary"] or "")),
             ],
             update_check=bool(general.get("update_check")),
             network_check=bool(general.get("network_check")),
@@ -185,23 +186,17 @@ class Coordinator:
         status: list[str] = []
         if self.__draining:
             busy = self.__busy_slots()
-            status.append(
-                f"Finishing {busy} download{'s' if busy != 1 else ''}, "
-                + "c to continue, q to quit now"
-            )
+            status.append(f"Completing {busy}")
         suspension = self.__shared.suspension
         if suspension.active():
             until = Util.get_time(int(time() + suspension.remaining()))
-            status.append(f"Suspended until {until}, too many restricted slots")
+            status.append(f"Suspended \u2192 {until}")
         gate = self.__shared.gate.status()
         if gate.exclusive is not None:
-            status.append(f"Large download in slot {gate.exclusive + 1}, others wait")
+            status.append(f"Slot {gate.exclusive + 1} alone")
         elif gate.waiting_exclusive is not None:
-            status.append(
-                f"Slot {gate.waiting_exclusive + 1} waits for the running downloads "
-                + "to finish before a large download"
-            )
-        header = " · ".join(status)
+            status.append(f"Slot {gate.waiting_exclusive + 1} waiting")
+        header = View.SEGMENT_SEPARATOR.join(status)
         if header != self.__header:
             self.__header = header
             self.__view_queue.put(HeaderMessage(status=header))
@@ -255,7 +250,7 @@ class Coordinator:
         text = text.strip()
         key = Coordinator.normalize_url(text)
         if key is None:
-            self.__notice(f"Not added, not an http(s) URL: {text}", error=True)
+            self.__notice(f"Not an http(s) URL: {text}", error=True)
             return
         for channel in self.__channels:
             name, url = cast(tuple[str, str], tuple(channel.row()[:2]))

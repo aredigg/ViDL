@@ -33,7 +33,15 @@ class View:
     HEADER_COL: int = 10
     HEADER_INPUT_ROW: int = 4
     NOTICE_SECONDS: float = 6.0
-    SEGMENT_SEPARATOR: str = " · "
+    SEGMENT_SEPARATOR: str = " | "
+    # The network state is only a symbol: (Nerd Font, plain). The plain ones
+    # are a globe with a mark
+    NETWORK_SYMBOLS: ClassVar[dict[NetworkState, tuple[str, str]]] = {
+        NetworkState.ONLINE: ("\U000f0c54", "🌐 ✓"),
+        NetworkState.OFFLINE: ("\U000f0c5f", "🌐 ✕"),
+        NetworkState.DEGRADED: ("\U000f0c9a", "🌐 !"),
+        NetworkState.UNKNOWN: ("\U000f0c8a", "🌐 ?"),
+    }
     DISK_WARNING: float = 0.10
     DISK_ERROR: float = 0.02
     ANIMATED: ClassVar[list[str]] = ["○", "●", "○", "●"]
@@ -138,12 +146,16 @@ class View:
         self.__visible = False
         self.__top_index: int = 0
         self.__view_top_decorator = ("", "")
-        if Config.settings["General"]["nerd_fonts"]:
+        self.__nerd_fonts = bool(Config.settings["General"]["nerd_fonts"])
+        # Without the check the state is always unknown, which is not shown
+        self.__network_check = bool(Config.settings["General"]["network_check"])
+        if self.__nerd_fonts:
             self.__view_top_decorator = (View.NF_PREFIX, View.NF_SUFFIX)
         self.__status = View.Status(state=View.Status.State.INACTIVE)
         self.__timer: int | None = None
         self.__top = View.Top()
         self.__temp_filepath: str | None = None
+        self.__playlist_length = 0
         self.__bitrate_ring: deque[int] = deque(maxlen=View.RING_SIZE)
         # (elapsed, size) samples, the window used for the average bitrate
         self.__sample_ring: deque[tuple[float, int]] = deque(maxlen=View.RING_SIZE)
@@ -164,8 +176,8 @@ class View:
         width = self.__header_width()
         if width <= 0:
             return
-        uptime = Util.format_uptime(time() - self.__started)
-        line = View.__compose("𓃥  ViDL", [f"{Util.get_time()}  up {uptime}"], width)
+        uptime = Util.format_seconds(max(0, int(time() - self.__started)))
+        line = View.__compose("𓃥  ViDL", [Util.get_time(), uptime], width)
         terminal.print(line, self.__size.origin_row + 1, View.HEADER_COL)
         status = self.__status.message or self.__header_status
         left = (
@@ -240,23 +252,22 @@ class View:
                 text = f"{disk.label} {disk.error or 'unavailable'}"
                 segments.append(View.__colored(text, ANSI.Color.Cerise))
                 continue
-            text = f"{disk.label} {format_bytes(disk.free)} free ({ratio:.0%})"
+            text = f"{disk.label} {format_bytes(disk.free)} ({ratio:.0%})"
             if ratio < View.DISK_ERROR:
                 text = View.__colored(text, ANSI.Color.Cerise)
             elif ratio < View.DISK_WARNING:
                 text = View.__colored(text, ANSI.Color.BurntSienna)
             segments.append(text)
-        match system.network:
-            case NetworkState.ONLINE:
-                segments.append("online")
-            case NetworkState.DEGRADED:
-                errors = system.network_errors
-                text = f"degraded ({errors} error{'s' if errors != 1 else ''})"
-                segments.append(View.__colored(text, ANSI.Color.BurntSienna))
-            case NetworkState.OFFLINE:
-                segments.append(View.__colored("offline", ANSI.Color.Cerise))
-            case NetworkState.UNKNOWN:
-                pass
+        if self.__network_check:
+            symbol = View.NETWORK_SYMBOLS[system.network][0 if self.__nerd_fonts else 1]
+            match system.network:
+                case NetworkState.ONLINE | NetworkState.UNKNOWN:
+                    segments.append(symbol)
+                case NetworkState.DEGRADED:
+                    text = f"{symbol} {system.network_errors}"
+                    segments.append(View.__colored(text, ANSI.Color.BurntSienna))
+                case NetworkState.OFFLINE:
+                    segments.append(View.__colored(symbol, ANSI.Color.Cerise))
         version = system.version
         if version.restart_required:
             text = f"yt-dlp {version.running}, restart for {version.installed}"
@@ -391,12 +402,13 @@ class View:
         if self.__item_entity is not None:
             max_len = self.__size.cols - 34
             if max_len > 0:
-                # The episode number, the same as is written to the file
-                index_string = (
-                    str(self.__item_entity.episode)
-                    if self.__item_entity.episode > 0
-                    else ""
-                )
+                index = 0
+                index_string = ""
+                if self.__item_entity.index:
+                    index = self.__item_entity.index
+                if index > 0 and self.__playlist_length > 0:
+                    index = max(1, self.__playlist_length - index + 1)
+                    index_string = str(index)
                 line = (
                     f"{Util.get_date(self.__item_entity.date):>10.10}"
                     + " │ "
@@ -668,6 +680,7 @@ class View:
     def set_count(self, value: int) -> None:
         if value > 0:
             self.__top = View.Top(self.__top.name, f"({value})")
+            self.__playlist_length = value
 
     def set_cutoff(self, value: int) -> None:
         if value > 0:

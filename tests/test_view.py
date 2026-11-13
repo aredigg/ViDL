@@ -2,11 +2,12 @@
 import os
 import unittest
 from dataclasses import replace
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 from tests.helpers import FakeTerminal, IsolatedTestCase, private
 from vidl.ansi import ANSI
+from vidl.config import Config
 from vidl.controls import Controls
 from vidl.item import Item
 from vidl.keyboard import Key, LineEditor
@@ -146,17 +147,14 @@ class TestDrawing(ViewTestCase):
         self.view.set_count(10)
         self.view.set_item_entity(
             Item.Entity(
-                "abc", 2, 0, 365 * Util.SECONDS_PER_DAY, "A title", "", 0, "", "", 9
+                "abc", 2, 0, 365 * Util.SECONDS_PER_DAY, "A title", "", 0, "", ""
             )
         )
         line = self.draw().text()
-        # The episode number, as written to the file
-        self.assertIn("1971-01-01 │    9 │ A title", line)
+        self.assertIn("1971-01-01 │    9 │ A title", line)  # numbered from the oldest
         self.assertIn("[abc]", line)
 
-    def test_item_line_without_an_episode(self):
-        # The position in the list is no episode number, nothing is shown
-        self.view.set_count(10)
+    def test_item_line_without_a_count_shows_no_number(self):
         self.view.set_item_entity(
             Item.Entity(
                 "abc", 2, 0, 365 * Util.SECONDS_PER_DAY, "A title", "", 0, "", ""
@@ -313,7 +311,7 @@ class TestHeader(ViewTestCase):
 
     def system(self, **changes: Any) -> SystemStatus:
         status = SystemStatus(
-            disks=(DiskStatus("dl/tmp", "/out", free=412 * 2**30, total=1084 * 2**30),),
+            disks=(DiskStatus("d/t", "/out", free=412 * 2**30, total=1084 * 2**30),),
             network=NetworkState.ONLINE,
             version=VersionStatus(running="2026.08.19"),
         )
@@ -327,22 +325,46 @@ class TestHeader(ViewTestCase):
         for row, col, text in self.terminal.writes:
             self.assertLessEqual(col - 1 + ANSI.len(text), self.WIDTH, (row, text))
 
+    def uptime_row(self, elapsed: int) -> str:
+        with mock.patch("vidl.view.time", return_value=NOW + elapsed):
+            return self.rows()[0]
+
     def test_clock_and_uptime(self):
         # The uptime is wall clock time, including time the computer slept
-        later = NOW + 2 * Util.SECONDS_PER_DAY + 3723
         self.clock[0] += 60  # the monotonic clock is not used for it
-        with mock.patch("vidl.view.time", return_value=later):
-            first, _, _ = self.rows()
+        first = self.uptime_row(2 * Util.SECONDS_PER_DAY + 3723)
         self.assertIn("ViDL", first)
-        self.assertTrue(first.endswith(f"{Util.get_time()}  up 2d 01:02:03"), first)
+        # Formatted as every other duration, in hours: no days, no word
+        self.assertTrue(first.endswith(f"{Util.get_time()} | 49:03′"), first)
+        self.assertNotIn("up", first)
+
+    def test_the_uptime_is_formatted_by_format_seconds(self):
+        for elapsed in (0, 59, 65, 3570, 3600, 3725, 86_400, 90_061):
+            with self.subTest(elapsed=elapsed):
+                expected = f"{Util.get_time()} | {Util.format_seconds(elapsed)}"
+                self.assertTrue(self.uptime_row(elapsed).endswith(expected))
+        self.assertTrue(self.uptime_row(65).endswith("| 01′05″"))
+
+    def test_the_uptime_never_goes_negative(self):
+        # The wall clock was set back
+        row = self.uptime_row(-500)
+        self.assertTrue(row.endswith(f"{Util.get_time()} | 00′00″"), row)
+
+    def test_the_uptime_goes_first_when_narrow(self):
+        self.header.resize(cols=26)
+        row = self.uptime_row(3725)
+        self.assertTrue(row.endswith(Util.get_time()), row)
+        self.assertNotIn("|", row)
 
     def test_system_status(self):
         self.header.set_system_status(self.system())
         _, second, _ = self.rows()
         self.assertTrue(
-            second.endswith("dl/tmp 412G free (38%) · online · yt-dlp 2026.08.19"),
+            second.endswith("d/t 412G (38%) | \U000f0c54 | yt-dlp 2026.08.19"),
             second,
         )
+        self.assertNotIn("free", second)
+        self.assertNotIn("·", second)
 
     def test_nothing_is_shown_before_the_first_status(self):
         _, second, _ = self.rows()
@@ -351,33 +373,108 @@ class TestHeader(ViewTestCase):
     def test_low_disk_space_is_colored(self):
         for free, color in ((5, ANSI.Color.BurntSienna), (1, ANSI.Color.Cerise)):
             with self.subTest(free=free):
-                disk = DiskStatus("dl", "/out", free=free * 2**30, total=100 * 2**30)
+                disk = DiskStatus("d", "/out", free=free * 2**30, total=100 * 2**30)
                 self.header.set_system_status(self.system(disks=(disk,)))
                 self.draw(self.header)
-                self.assertIn(
-                    f"{color}dl {free}.0G free ({free}%)", self.terminal.raw()
-                )
+                self.assertIn(f"{color}d {free}.0G ({free}%)", self.terminal.raw())
 
     def test_unavailable_disk(self):
-        disk = DiskStatus("tmp", "/x", error="unavailable")
+        disk = DiskStatus("t", "/x", error="unavailable")
         self.header.set_system_status(self.system(disks=(disk,)))
-        self.assertIn("tmp unavailable", self.rows()[1])
+        self.assertIn("t unavailable", self.rows()[1])
 
-    def test_network_states(self):
-        cases = (
-            (NetworkState.DEGRADED, 3, "degraded (3 errors)"),
-            (NetworkState.DEGRADED, 1, "degraded (1 error)"),
-            (NetworkState.OFFLINE, 0, "offline"),
+    NERD: ClassVar[dict[NetworkState, str]] = {
+        NetworkState.ONLINE: "\U000f0c54",
+        NetworkState.OFFLINE: "\U000f0c5f",
+        NetworkState.UNKNOWN: "\U000f0c8a",
+        NetworkState.DEGRADED: "\U000f0c9a",
+    }
+    PLAIN: ClassVar[dict[NetworkState, str]] = {
+        NetworkState.ONLINE: "🌐 ✓",
+        NetworkState.OFFLINE: "🌐 ✕",
+        NetworkState.UNKNOWN: "🌐 ?",
+        NetworkState.DEGRADED: "🌐 !",
+    }
+
+    def header_with(self, nerd_fonts: bool, **config: bool) -> View:
+        Config.settings["General"].update(nerd_fonts=nerd_fonts, **config)
+        header = View(header=True)
+        header.resize(rows=View.HEADER_HEIGHT, cols=self.WIDTH)
+        return header
+
+    def network_segment(self, header: View, **changes: Any) -> str:
+        header.set_system_status(self.system(**changes))
+        self.draw(header)
+        return self.terminal.row(3)
+
+    def test_network_states_are_symbols_with_nerd_fonts(self):
+        header = self.header_with(True)
+        for state, symbol in self.NERD.items():
+            with self.subTest(state=state):
+                # Only a degraded network has a number, the errors
+                second = self.network_segment(header, network=state, network_errors=3)
+                count = " 3" if state is NetworkState.DEGRADED else ""
+                self.assertIn(f"| {symbol}{count} |", second)
+                for word in ("online", "offline", "degraded", "unknown", "error"):
+                    self.assertNotIn(word, second)
+
+    def test_network_states_are_plain_symbols_without_nerd_fonts(self):
+        header = self.header_with(False)
+        for state, symbol in self.PLAIN.items():
+            with self.subTest(state=state):
+                second = self.network_segment(header, network=state, network_errors=3)
+                count = " 3" if state is NetworkState.DEGRADED else ""
+                self.assertIn(f"| {symbol}{count} |", second)
+                for nerd in self.NERD.values():
+                    self.assertNotIn(nerd, second)
+
+    def test_the_symbols_are_all_different(self):
+        for column in (0, 1):
+            symbols = [pair[column] for pair in View.NETWORK_SYMBOLS.values()]
+            self.assertEqual(len(set(symbols)), 4)
+        self.assertEqual(set(View.NETWORK_SYMBOLS), set(NetworkState))
+
+    def test_a_degraded_network_shows_the_number_of_errors(self):
+        header = self.header_with(True)
+        second = self.network_segment(
+            header, network=NetworkState.DEGRADED, network_errors=3
         )
-        for state, errors, text in cases:
-            with self.subTest(state=state, errors=errors):
-                status = self.system(network=state, network_errors=errors)
-                self.header.set_system_status(status)
-                self.assertIn(text, self.rows()[1])
-        self.header.set_system_status(self.system(network=NetworkState.UNKNOWN))
-        second = self.rows()[1]
-        self.assertNotIn("online", second)
-        self.assertNotIn("unknown", second)
+        self.assertIn(
+            f"{ANSI.Color.BurntSienna}{self.NERD[NetworkState.DEGRADED]} 3",
+            self.terminal.raw(),
+        )
+        self.assertIn("\U000f0c9a 3 |", second)
+
+    def test_the_colors_of_the_network_states(self):
+        header = self.header_with(True)
+        _ = self.network_segment(header, network=NetworkState.OFFLINE)
+        self.assertIn(
+            f"{ANSI.Color.Cerise}{self.NERD[NetworkState.OFFLINE]}", self.terminal.raw()
+        )
+        self.terminal.clear()
+        _ = self.network_segment(header, network=NetworkState.ONLINE)
+        raw = self.terminal.raw()
+        self.assertNotIn(ANSI.Color.Cerise + self.NERD[NetworkState.ONLINE], raw)
+        self.assertNotIn(ANSI.Color.BurntSienna + self.NERD[NetworkState.ONLINE], raw)
+
+    def test_no_network_symbol_when_the_check_is_off(self):
+        for nerd_fonts in (True, False):
+            with self.subTest(nerd_fonts=nerd_fonts):
+                header = self.header_with(nerd_fonts, network_check=False)
+                for state in NetworkState:
+                    second = self.network_segment(header, network=state)
+                    for symbol in (*self.NERD.values(), *self.PLAIN.values()):
+                        self.assertNotIn(symbol, second)
+
+    def test_the_network_symbols_fit_the_width_calculation(self):
+        # A wide globe takes two columns, a glyph one: nothing may overflow
+        for nerd_fonts in (True, False):
+            header = self.header_with(nerd_fonts)
+            for state in NetworkState:
+                _ = self.network_segment(header, network=state, network_errors=3)
+                for _row, col, text in self.terminal.writes:
+                    self.assertLessEqual(col - 1 + ANSI.len(text), self.WIDTH)
+                self.terminal.clear()
 
     def test_updates_and_restarts(self):
         outdated = VersionStatus(running="2026.08.19", latest="2026.09.30")
@@ -390,11 +487,16 @@ class TestHeader(ViewTestCase):
         self.assertIn("yt-dlp 2026.08.19, restart for 2026.09.30", self.rows()[1])
 
     def test_narrow_headers_drop_the_least_important_segments(self):
-        self.header.resize(cols=55)
+        self.header.resize(cols=40)
         self.header.set_system_status(self.system())
         _, second, _ = self.rows()
-        self.assertIn("dl/tmp 412G free", second)
+        self.assertIn("d/t 412G", second)
+        self.assertIn("\U000f0c54", second)
         self.assertNotIn("yt-dlp", second)
+        self.header.resize(cols=28)
+        _, second, _ = self.rows()
+        self.assertIn("d/t 412G", second)
+        self.assertNotIn("\U000f0c54", second)
 
     def test_header_status_and_shutdown(self):
         self.header.set_header_status("Finishing 2 downloads")
@@ -408,7 +510,14 @@ class TestHeader(ViewTestCase):
 
     def test_hints_are_shown_by_default(self):
         self.assertEqual(self.rows()[2].strip(), Controls.HINTS)
+        self.assertEqual(Controls.HINTS, "[Q] Quit | [C] Complete | [A] Add")
         self.assertIsNone(self.header.cursor_position())
+
+    def test_no_separator_but_the_bar(self):
+        for text in (Controls.HINTS, Controls.PROMPT_HINT, View.SEGMENT_SEPARATOR):
+            self.assertNotIn("·", text)
+        self.assertEqual(View.SEGMENT_SEPARATOR, " | ")
+        self.assertEqual(Controls.PROMPT_HINT, "[Enter] Add | [Esc] Cancel")
 
     def test_notices_expire(self):
         self.header.set_notice("Added https://x")

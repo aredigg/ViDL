@@ -22,8 +22,6 @@ class Item:
         age_limit: int
         stream: str
         top_name: str
-        # The number of the video in its channel or playlist, 0 when unknown
-        episode: int = 0
 
     @dataclass
     class Progress:
@@ -103,9 +101,7 @@ class Item:
         return res
 
     @staticmethod
-    def get_entity(
-        info: dict[str, object], name: str, index: int, episode: int = 0
-    ) -> Entity:
+    def get_entity(info: dict[str, object], name: str, index: int) -> Entity:
         stream = ""
         if info.get("is_live") or False:
             stream = "LIVE"
@@ -121,7 +117,6 @@ class Item:
             age_limit=Item.get_int(info, "age_limit"),
             stream=stream,
             top_name=name,
-            episode=episode,
         )
 
     @staticmethod

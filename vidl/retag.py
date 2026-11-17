@@ -40,7 +40,9 @@ Speed and safety:
   downloads do not have them either: the comment, the encoder, and the
   explicit rating of a video that is not.
 - Files that are already in the new format are left alone (without a request),
-  so an interrupted run can be repeated.
+  so an interrupted run can be repeated. --force checks them anyway, and
+  --force-small-episodes those whose episode number is below 256 or missing,
+  the ones ffmpeg may have cut to one byte.
 - YouTube is asked slowly, and the run stops at once when YouTube restricts
   the requests (bot check, rate limit), or when the network is down.
 """
@@ -308,6 +310,18 @@ def candidate_ids(tags: Mapping[str, object], path: str) -> list[str]:
         if text and YOUTUBE_ID.fullmatch(text) and text not in ids:
             ids.append(text)
     return ids
+
+
+# ffmpeg wrote the episode number as one byte, so 256 became 0 (the atom is
+# left out) and 268 became 12: only a number above this is certainly right
+SMALL_EPISODE = 256
+
+
+def has_small_episode(tags: Mapping[str, object]) -> bool:
+    """Whether the episode number of the file may have been cut to one byte
+    (see SMALL_EPISODE): it is below 256, or there is none."""
+    number = _number(tags.get("tves"), positive=True)
+    return number is None or number < SMALL_EPISODE
 
 
 def is_current(tags: Mapping[str, object]) -> bool:
@@ -578,6 +592,7 @@ class Retagger:
         *,
         dry_run: bool = False,
         force: bool = False,
+        force_small_episodes: bool = False,
         safe: bool = False,
         sleep: float = 3.0,
         tolerance: float = 5.0,
@@ -593,6 +608,7 @@ class Retagger:
         self.__source = source
         self.__dry_run = dry_run
         self.__force = force
+        self.__force_small = force_small_episodes
         self.__safe = safe
         self.__sleep = sleep
         self.__tolerance = tolerance
@@ -653,7 +669,7 @@ class Retagger:
         ids = candidate_ids(tags, path)
         if not ids:
             raise _Skip("no video id in tven or in the file name")
-        if not self.__force and is_current(tags):
+        if not self.__forced(tags) and is_current(tags):
             return Outcome(path, Status.CURRENT, "already in the current format")
         length = float(mp4.info.length)
         probe = self.__probe(path)
@@ -689,6 +705,10 @@ class Retagger:
         else:
             self.__rewrite(path, before, tags, target, probe, length)
         return Outcome(path, Status.UPDATED, text, changes, warnings)
+
+    def __forced(self, tags: Mapping[str, object]) -> bool:
+        """Whether a file in the current format is checked anyway."""
+        return self.__force or (self.__force_small and has_small_episode(tags))
 
     def __fetch(
         self, ids: list[str], length: float
@@ -995,6 +1015,7 @@ class Arguments(argparse.Namespace):
     folder: str = ""
     dry_run: bool = False
     force: bool = False
+    force_small_episodes: bool = False
     safe: bool = False
     no_recursive: bool = False
     sleep: float = 3.0
@@ -1043,6 +1064,13 @@ def parser() -> argparse.ArgumentParser:
         "--force",
         action="store_true",
         help="also retag files that already have the current format",
+    )
+    _ = result.add_argument(
+        "--force-small-episodes",
+        action="store_true",
+        help="like --force, but only for files in the current format whose "
+        + "episode number is below 256 or missing: ffmpeg cut the numbers of "
+        + "files downloaded by earlier versions to one byte (268 became 12)",
     )
     _ = result.add_argument(
         "--safe",
@@ -1131,6 +1159,7 @@ def main(
         youtube,
         dry_run=arguments.dry_run,
         force=arguments.force,
+        force_small_episodes=arguments.force_small_episodes,
         safe=arguments.safe,
         sleep=arguments.sleep,
         tolerance=arguments.tolerance,

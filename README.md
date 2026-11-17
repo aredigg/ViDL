@@ -138,9 +138,12 @@ counted in the summary and do not change the exit status.
 - Files that already have the new format, with the episode numbered as described, are skipped
   without a request, so an interrupted run can be repeated. `--force` checks them again. Files
   from earlier versions of ViDL, whose numbers were counted in another way, have no
-  `EPISODE_ORDER` and are therefore done again. Files downloaded while ffmpeg cut the episode
-  number to one byte (see below) look current, but a number above 255 in them is wrong (268 became
-  12): check those with `--force`, which only changes the files that are wrong.
+  `EPISODE_ORDER` and are therefore done again.
+- Files downloaded while ffmpeg cut the episode number to one byte (see below) look current, but
+  their number is wrong when it should be above 255 (268 became 12, and 256 or 512 became none).
+  `--force-small-episodes` is `--force` for the files whose episode number is below 256 or missing
+  only. A number from 256 up cannot be a cut one, so those files are skipped without a request.
+  Only the files that are wrong are changed.
 - YouTube is asked slowly: requests start at least `--sleep` seconds (default 3) apart. The time a
   request and the work on a file take counts, so only what is left of the interval is waited. The channel description is fetched once per
   channel (`--no-channel-description` leaves it out). The run stops when YouTube restricts the

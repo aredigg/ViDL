@@ -42,6 +42,7 @@ from vidl.retag import (
     cookie_browser,
     ffmpeg_tags,
     find_videos,
+    has_small_episode,
     is_current,
     normal,
     plan_changes,
@@ -475,6 +476,24 @@ class TestIsCurrent(unittest.TestCase):
 
     def test_season_one_is_current(self):
         self.assertTrue(is_current({**self.current(), "tvsn": ["1"]}))
+
+
+class TestHasSmallEpisode(unittest.TestCase):
+    def test_numbers_below_256_may_be_cut(self):
+        for number in (1, 12, 173, 255):
+            with self.subTest(number=number):
+                self.assertTrue(has_small_episode({"tves": [number]}))
+
+    def test_numbers_from_256_are_certainly_right(self):
+        for number in (256, 257, 268, 711, 70_000):
+            with self.subTest(number=number):
+                self.assertFalse(has_small_episode({"tves": [number]}))
+
+    def test_no_number_may_be_a_cut_one(self):
+        # ffmpeg leaves the atom out when 256 or 512 is cut to 0
+        for tags in ({}, {"tves": []}, {"tves": [0]}, {"tves": [-3]}, {"tves": ["x"]}):
+            with self.subTest(tags=tags):
+                self.assertTrue(has_small_episode(tags))
 
 
 class TestFindVideos(unittest.TestCase):
@@ -1669,6 +1688,189 @@ class TestInPlace(RetagTestCase):
 
 
 @needs_ffmpeg
+class TestSmallEpisodes(RetagTestCase):
+    """--force-small-episodes: files in the current format are checked again
+    when their episode number is below 256 or missing."""
+
+    TOTAL = 300
+    EPISODE = 268  # the real number of ID in the list of the channel
+
+    def source(self, video: str = ID) -> FakeSource:
+        """YouTube, where the video is number EPISODE of its channel."""
+        ids = [f"x{n:010}" for n in range(self.TOTAL)]  # newest first
+        ids[self.TOTAL - self.EPISODE] = video
+        return FakeSource({video: youtube_info(video)}, uploads={"UC123": ids})
+
+    def current_file(self, written: int | None, name: str = ID) -> str:
+        """A file in the current format whose number is `written`, as ffmpeg
+        leaves it: the real number cut to one byte, or none."""
+        path = old_file(self.path(f"{name}.mp4"))
+        outcome = self.retagger(self.source(name)).process(path)
+        self.assertEqual(outcome.status, Status.UPDATED, outcome.message)
+        self.assertEqual(texts(path)["tves"], (str(self.EPISODE),))
+        mp4 = MP4(path)
+        assert mp4.tags is not None
+        if written is None:
+            del mp4.tags["tves"]
+        else:
+            mp4.tags["tves"] = [written]
+        mp4.save()
+        return path
+
+    def run_one(
+        self, path: str, source: FakeSource | None = None, **options: Any
+    ) -> tuple[Status, FakeSource]:
+        source = source or self.source()
+        outcome = self.retagger(source, **options).process(path)
+        return outcome.status, source
+
+    def test_without_the_option_a_cut_number_is_not_found(self):
+        path = self.current_file(12)
+        status, source = self.run_one(path)
+        self.assertEqual(status, Status.CURRENT)
+        self.assertEqual(source.requests, [])
+        self.assertEqual(texts(path)["tves"], ("12",))
+
+    def test_a_cut_number_is_corrected(self):
+        path = self.current_file(12)
+        status, source = self.run_one(path, force_small_episodes=True)
+        self.assertEqual(status, Status.UPDATED)
+        self.assertEqual(source.requests, [ID])
+        self.assertEqual(texts(path)["tves"], (str(self.EPISODE),))
+
+    def test_a_number_that_was_cut_to_nothing_is_corrected(self):
+        # 256 and 512 become 0, which ffmpeg does not write
+        path = self.current_file(None)
+        status, _ = self.run_one(path, force_small_episodes=True)
+        self.assertEqual(status, Status.UPDATED)
+        self.assertEqual(texts(path)["tves"], (str(self.EPISODE),))
+
+    def test_only_the_episode_number_changes(self):
+        path = self.current_file(12)
+        before = texts(path)
+        _ = self.run_one(path, force_small_episodes=True)
+        after = texts(path)
+        changed = {
+            atom
+            for atom in before.keys() | after.keys()
+            if before.get(atom) != after.get(atom)
+        }
+        self.assertEqual(changed, {"tves"})
+
+    def test_a_number_from_256_is_left_alone_without_a_request(self):
+        for written in (256, 268, 711):
+            with self.subTest(written=written):
+                path = self.current_file(written, f"vid{written:08}")
+                source = self.source(f"vid{written:08}")
+                outcome = self.retagger(source, force_small_episodes=True).process(path)
+                self.assertEqual(outcome.status, Status.CURRENT)
+                self.assertEqual(source.requests, [])
+                self.assertEqual(texts(path)["tves"], (str(written),))
+
+    def test_a_small_number_that_is_right_is_not_rewritten(self):
+        # A channel of a few videos: the number is small and correct
+        path = old_file(self.path(f"{OTHER}.mp4"), tven=OTHER)
+        _ = self.retagger(FakeSource({OTHER: youtube_info(OTHER)})).process(path)
+        self.assertEqual(texts(path)["tves"], ("3",))
+        inode, data = os.stat(path).st_ino, self.bytes_of(path)
+        source = FakeSource({OTHER: youtube_info(OTHER)})
+        outcome = self.retagger(source, force_small_episodes=True).process(path)
+        self.assertEqual(outcome.status, Status.UNCHANGED)
+        self.assertEqual(source.requests, [OTHER])
+        self.assertEqual((os.stat(path).st_ino, self.bytes_of(path)), (inode, data))
+
+    def test_a_file_that_is_not_current_is_done_anyway(self):
+        path = old_file(self.path())
+        mp4 = MP4(path)
+        assert mp4.tags is not None
+        mp4.tags["tves"] = [999]  # large, but the file is in the old format
+        mp4.save()
+        status, _ = self.run_one(path, force_small_episodes=True)
+        self.assertEqual(status, Status.UPDATED)
+        self.assertEqual(texts(path)["tves"], (str(self.EPISODE),))
+
+    def test_force_checks_every_file_force_small_only_the_small_ones(self):
+        path = self.current_file(300)
+        source = self.source()
+        status = self.retagger(source, force=True).process(path).status
+        self.assertEqual(status, Status.UPDATED)  # 300 is wrong, 268 is right
+        self.assertEqual(source.requests, [ID])
+        both = self.current_file(300, "abcdefghijk")
+        source = self.source("abcdefghijk")
+        status = (
+            self.retagger(source, force=True, force_small_episodes=True)
+            .process(both)
+            .status
+        )
+        self.assertEqual(status, Status.UPDATED)
+        self.assertEqual(source.requests, ["abcdefghijk"])
+
+    def test_a_dry_run_shows_the_change_and_writes_nothing(self):
+        path = self.current_file(12)
+        before = self.bytes_of(path)
+        outcome = self.retagger(
+            self.source(), dry_run=True, force_small_episodes=True
+        ).process(path)
+        self.assertEqual(outcome.status, Status.WOULD_UPDATE)
+        self.assertEqual(
+            [str(c) for c in outcome.changes], [f"tves: '12' -> '{self.EPISODE}'"]
+        )
+        self.assertEqual(self.bytes_of(path), before)
+
+    def test_it_works_with_safe_copies_too(self):
+        path = self.current_file(12)
+        status, _ = self.run_one(path, force_small_episodes=True, safe=True)
+        self.assertEqual(status, Status.UPDATED)
+        self.assertEqual(texts(path)["tves"], (str(self.EPISODE),))
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_corrected_file_is_left_alone_by_the_next_run(self):
+        # The number is 256 or more now, so it is not asked for again
+        path = self.current_file(12)
+        _ = self.run_one(path, force_small_episodes=True)
+        status, source = self.run_one(path, force_small_episodes=True)
+        self.assertEqual(status, Status.CURRENT)
+        self.assertEqual(source.requests, [])
+
+    def test_a_whole_folder(self):
+        wrong = self.current_file(12, "vid00000001")
+        missing = self.current_file(None, "vid00000002")
+        right = self.current_file(self.EPISODE, "vid00000003")
+        # YouTube knows all of them as the same video of the list
+        videos = {
+            name: youtube_info(name)
+            for name in ("vid00000001", "vid00000002", "vid00000003")
+        }
+        ids = [f"x{n:08}" for n in range(self.TOTAL)]
+        for position, name in enumerate(videos, start=10):
+            ids[position] = name
+        source = FakeSource(videos, uploads={"UC123": ids})
+        summary = self.retagger(source, force_small_episodes=True).run(self.folder)
+        self.assertEqual(summary.counts[Status.UPDATED], 2)
+        self.assertEqual(summary.counts[Status.CURRENT], 1)
+        self.assertEqual(sorted(source.requests), ["vid00000001", "vid00000002"])
+        self.assertEqual(texts(wrong)["tves"], (str(self.TOTAL - 10),))
+        self.assertEqual(texts(missing)["tves"], (str(self.TOTAL - 11),))
+        self.assertEqual(texts(right)["tves"], (str(self.EPISODE),))
+
+    def test_current_files_do_not_count_for_the_limit(self):
+        for number, written in enumerate((12, 13, 14), start=1):
+            _ = self.current_file(written, f"vid{number:08}")
+        ok = self.current_file(self.EPISODE, "vid00000009")
+        source = FakeSource(
+            {f"vid{n:08}": youtube_info(f"vid{n:08}") for n in (1, 2, 3, 9)},
+            uploads={"UC123": [f"vid{n:08}" for n in (9, 3, 2, 1)]},
+        )
+        summary = self.retagger(source, force_small_episodes=True, limit=2).run(
+            self.folder
+        )
+        self.assertEqual(len(source.requests), 2)
+        self.assertEqual(texts(ok)["tves"], (str(self.EPISODE),))
+        self.assertEqual(summary.counts[Status.UPDATED], 2)
+        self.assertTrue(summary.limited)
+
+
+@needs_ffmpeg
 class TestRun(RetagTestCase):
     def make(self, *names: str) -> None:
         for name in names:
@@ -2181,13 +2383,19 @@ class TestMain(IsolatedTestCase):
             (
                 arguments.dry_run,
                 arguments.force,
+                arguments.force_small_episodes,
                 arguments.safe,
                 arguments.sleep,
                 arguments.tolerance,
                 arguments.limit,
             ),
-            (False, False, False, 3.0, 5.0, None),
+            (False, False, False, False, 3.0, 5.0, None),
         )
+        arguments = retag.parser().parse_args(
+            ["x", "--force-small-episodes"], namespace=Arguments()
+        )
+        self.assertTrue(arguments.force_small_episodes)
+        self.assertFalse(arguments.force)
         arguments = retag.parser().parse_args(["x", "--safe"], namespace=Arguments())
         self.assertTrue(arguments.safe)
 
@@ -2203,6 +2411,28 @@ class TestMain(IsolatedTestCase):
         self.assertIn("warning: the video is 12:34 long on YouTube", out)
         self.assertIn("Done: 1 updated, 1 with a warning", out)
         self.assertEqual(texts(path)["tven"], (ID,))
+
+    @needs_ffmpeg
+    def test_force_small_episodes_end_to_end(self):
+        folder = self.temp_dir()
+        path = old_file(os.path.join(folder, f"{ID}.mp4"))
+        ids = [f"vid{n:08}" for n in range(300)]
+        ids[300 - 268] = ID
+        make = lambda: FakeSource({ID: youtube_info()}, uploads={"UC123": ids})
+        common = (folder, "--sleep", "0", "--cookies-from-browser", "none")
+        status, _, _ = self.run_main(*common, source=make())
+        self.assertEqual(status, 0)
+        mp4 = MP4(path)
+        assert mp4.tags is not None
+        mp4.tags["tves"] = [12]  # as ffmpeg cut it
+        mp4.save()
+        status, out, _ = self.run_main(*common, source=make())
+        self.assertIn("Done: 1 current", out)
+        self.assertEqual(texts(path)["tves"], ("12",))
+        status, out, _ = self.run_main(*common, "--force-small-episodes", source=make())
+        self.assertEqual(status, 0)
+        self.assertIn("Done: 1 updated", out)
+        self.assertEqual(texts(path)["tves"], ("268",))
 
     @needs_ffmpeg
     def test_a_dry_run_end_to_end(self):

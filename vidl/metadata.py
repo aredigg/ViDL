@@ -23,9 +23,15 @@ each video is downloaded. Facts relied upon (yt-dlp 2026.08.19):
   meta_* fields set here override it.
 - ffmpeg's mp4 muxer writes title ©nam, artist ©ART, album_artist aART, album
   ©alb, show tvsh, media_type stik, hd_video hdvd, date ©day, episode_id tven,
-  season_number tvsn, network tvnn, description desc, synopsis ldes, keywords
-  keyw, comment ©cmt and grouping ©grp, but neither rtng nor sdes, and it
-  always adds ©too. AtomPostProcessor fixes that up with mutagen.
+  season_number tvsn, episode_sort tves, network tvnn, description desc,
+  synopsis ldes, keywords keyw, comment ©cmt and grouping ©grp, but neither
+  rtng nor sdes, and it always adds ©too. AtomPostProcessor fixes that up with
+  mutagen.
+- ffmpeg writes the episode (tves) and season (tvsn) numbers as one byte: 268
+  becomes 12 and 300 becomes 44 (checked with ffmpeg N-127946, which stores the
+  value modulo 256). Channels have far more than 255 videos, so
+  AtomPostProcessor writes both numbers again with mutagen, as the four byte
+  integers the atoms are.
 - PostProcessor.pp_key() strips the last two characters of the class name (and
   an "FFmpeg" prefix), which would give "MetadataPostProcess", while
   FFmpegMetadataPP already reports "Metadata", so the key is set explicitly.
@@ -129,6 +135,13 @@ NETWORK_NAMES: dict[str, str] = {
 ATOM_EXTENSIONS: tuple[str, ...] = ("mp4", "m4a", "mov")
 # Written by ffmpeg whatever the metadata (the encoder), removed
 ATOMS_REMOVED: tuple[str, ...] = ("©too", "©enc")
+# Atoms of a whole number that ffmpeg writes as one byte, and the info field
+# each one is made of
+INTEGER_ATOMS: tuple[tuple[str, str], ...] = (
+    ("tves", "episode_number"),
+    ("tvsn", "season_number"),
+)
+MAX_INTEGER = 2**31 - 1  # of the four bytes these atoms have
 FREEFORM_PREFIX = "----:com.apple.iTunes:"
 # Atom name -> info key of the text written to it
 FREEFORM_ATOMS: tuple[tuple[str, str], ...] = (
@@ -346,10 +359,16 @@ def keywords(info: Mapping[str, object]) -> str | None:
 
 def atom_values(info: Mapping[str, object]) -> dict[str, list[object]]:
     """The atoms AtomPostProcessor writes, as mutagen takes them (atom ->
-    list of values): rtng (age_limit >= 18), sdes (vidl_channel_description)
-    and the freeform CHANNEL_URL, CHANNEL_ID, VIDEO_URL and UPLOAD_TIMESTAMP.
-    Only atoms with a valid source value are included."""
+    list of values): tves and tvsn (episode_number and season_number, which
+    ffmpeg only writes as one byte), rtng (age_limit >= 18), sdes
+    (vidl_channel_description) and the freeform CHANNEL_URL, CHANNEL_ID,
+    VIDEO_URL and UPLOAD_TIMESTAMP. Only atoms with a valid source value are
+    included."""
     values: dict[str, list[object]] = {}
+    for atom, key in INTEGER_ATOMS:
+        number = info.get(key)
+        if _is_int(number) and 0 < cast(int, number) <= MAX_INTEGER:
+            values[atom] = [number]
     age_limit = info.get("age_limit")
     if _is_int(age_limit) and cast(int, age_limit) >= 18:
         values["rtng"] = [1]
@@ -495,6 +514,8 @@ class AtomPostProcessor(_SingleHooks):
     EmbedThumbnailPP (which uses mutagen as well):
 
     - removes the encoder atoms ©too and ©enc,
+    - writes the episode and season numbers (tves, tvsn), which ffmpeg cuts
+      to one byte, so that a number above 255 is wrong in the file,
     - writes rtng (age limit), sdes (channel description) and the freeform
       atoms of atom_values, none of which ffmpeg can write.
 

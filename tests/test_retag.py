@@ -1979,6 +1979,32 @@ class TestSameAsNewDownloads(RetagTestCase):
     def test_a_typical_video(self):
         self.compare(youtube_info())
 
+    def test_episode_numbers_above_255_are_the_same(self):
+        # ffmpeg alone cuts the number to one byte (268 -> 12), a download
+        # and a retag both have to write it in full
+        for episode in (255, 256, 268, 711):
+            with self.subTest(episode=episode):
+                total = episode + 130
+                ids = [f"vid{n:08}" for n in range(total)]  # newest first
+                ids[total - episode] = ID
+                context = MetadataContext(
+                    episode_number=episode,
+                    episode_order=UPLOADS,
+                    group="Shorts",
+                    channel_description="About the channel",
+                )
+                info = youtube_info()
+                expected = self.download_tags({**info, "height": 180}, context)
+                path = self.path(f"{episode}/{ID}.mp4")
+                _ = old_file(path, extra={"tves": [99], "©grp": ["Shorts"]})
+                source = FakeSource({ID: info}, uploads={"UC123": ids})
+                outcome = self.retagger(source).process(path)
+                self.assertEqual(outcome.status, Status.UPDATED, outcome.message)
+                actual = texts(path)
+                self.assertEqual(expected["tves"], (str(episode),))
+                self.assertEqual(actual["tves"], (str(episode),))
+                self.assertEqual(actual["tvsn"], expected["tvsn"])
+
     def test_a_video_for_adults(self):
         self.compare(youtube_info(age_limit=18))
 

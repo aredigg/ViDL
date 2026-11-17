@@ -138,7 +138,9 @@ counted in the summary and do not change the exit status.
 - Files that already have the new format, with the episode numbered as described, are skipped
   without a request, so an interrupted run can be repeated. `--force` checks them again. Files
   from earlier versions of ViDL, whose numbers were counted in another way, have no
-  `EPISODE_ORDER` and are therefore done again.
+  `EPISODE_ORDER` and are therefore done again. Files downloaded while ffmpeg cut the episode
+  number to one byte (see below) look current, but a number above 255 in them is wrong (268 became
+  12): check those with `--force`, which only changes the files that are wrong.
 - YouTube is asked slowly: requests start at least `--sleep` seconds (default 3) apart. The time a
   request and the work on a file take counts, so only what is left of the interval is waited. The channel description is fetched once per
   channel (`--no-channel-description` leaves it out). The run stops when YouTube restricts the
@@ -251,6 +253,10 @@ left empty. The video URL, the channel URL and id, the upload time as ISO timest
 episode was counted are kept in the freeform tags `VIDEO_URL`, `CHANNEL_URL`, `CHANNEL_ID`,
 `UPLOAD_TIMESTAMP` and `EPISODE_ORDER`.
 
+ffmpeg writes the episode and season numbers as a single byte, so a channel with more than 255
+videos gets the wrong number (268 becomes 12). ViDL therefore writes `tves` and `tvsn` again with
+mutagen, as the whole numbers they are.
+
 #### Episode numbers
 
 The first video of a channel is episode 1, the next 2, and so on, in the order they were published.
@@ -258,8 +264,8 @@ YouTube keeps a list of all uploads of every channel, videos, shorts and streams
 first, and the number is the position counted from the end of that list. It is the same whether the
 video is found in the videos, shorts or live tab, and a new video never changes the number of the
 others (only a removed video moves the ones after it). The list is fetched when a video is about
-to be downloaded, once per run of a channel, and shown in the panel. Without the list no number is
-written, rather than a wrong one.
+to be downloaded, once per run of a channel, and only written to the file (the panel numbers its own list).
+Without the list no number is written, rather than a wrong one.
 
 The videos of a playlist (an address with `list=`) are numbered in the order of the playlist, the
 first is 1, as that is the order its maker gave it. Other sites, and videos on their own, get no

@@ -1295,6 +1295,39 @@ class TestAtomValues(unittest.TestCase):
     def test_nothing_without_sources(self):
         self.assertEqual(atom_values({}), {})
 
+    def test_episode_and_season_numbers(self):
+        # ffmpeg writes them as one byte, so they are written again
+        values = atom_values({"episode_number": 268, "season_number": 300})
+        self.assertEqual(values, {"tves": [268], "tvsn": [300]})
+        for number in (1, 255, 256, 257, 70_000, 2**31 - 1):
+            with self.subTest(number=number):
+                self.assertEqual(
+                    atom_values({"episode_number": number}), {"tves": [number]}
+                )
+
+    def test_only_the_numbers_that_are_there_are_written(self):
+        self.assertEqual(atom_values({"episode_number": 4}), {"tves": [4]})
+        self.assertEqual(atom_values({"season_number": 1}), {"tvsn": [1]})
+
+    def test_invalid_numbers_are_left_out(self):
+        # Nothing is better than a wrong number
+        invalid: list[object] = [
+            0,
+            -1,
+            2**31,
+            True,
+            False,
+            "268",
+            268.0,
+            None,
+            [268],
+            float("nan"),
+        ]
+        for number in invalid:
+            with self.subTest(number=number):
+                self.assertEqual(atom_values({"episode_number": number}), {})
+                self.assertEqual(atom_values({"season_number": number}), {})
+
     def test_rating(self):
         cases: list[tuple[object, bool]] = [
             (18, True),
@@ -2241,6 +2274,66 @@ class TestAtomsEndToEnd(FileTestCase):
         self.assertEqual(tags["keyw"], ["One, two"])
         self.assertNotIn("\u00a9cmt", tags)
         self.assertEqual(tags["\u00a9grp"], ["Playlist"])
+
+    def whole_chain(self, **numbers: int) -> str:
+        """A video through the real metadata and atom post-processors, with the
+        episode and season number of the video stage, as a download goes."""
+        path = tiny_mp4(os.path.join(self.temp, "abc.mp4"), {"title": "Old"})
+        pp = MetadataPostProcessor()
+        pp.set_context(
+            MetadataContext(
+                series="Series",
+                episode_number=numbers.get("episode"),
+                episode_order="uploads",
+                season_number=numbers.get("season", 1),
+            )
+        )
+        info = pp.run(self.video_info())[1]
+        info.update(ext="mp4", filepath=path, __real_download=True)
+        ydl = self.ydl()
+        for processor in (new_file_metadata_pp(ydl), new_file_atom_pp(ydl)):
+            info = self.run_through(ydl, processor, info)
+        self.assertEqual(self.logger.warnings, [])
+        self.assertEqual(self.logger.errors, [])
+        return path
+
+    def test_episode_numbers_above_255_are_kept(self):
+        # ffmpeg alone makes 268 of it 12, and 429 173
+        for episode in (1, 12, 127, 128, 255, 256, 257, 268, 429, 711, 2265, 70_000):
+            with self.subTest(episode=episode):
+                path = self.whole_chain(episode=episode)
+                self.assertEqual(tags_of(path)["tves"], [episode])
+                self.assertEqual(freeform(path, "EPISODE_ORDER"), "uploads")
+
+    def test_season_numbers_above_255_are_kept(self):
+        for season in (1, 2, 255, 256, 300, 2024):
+            with self.subTest(season=season):
+                self.assertEqual(
+                    tags_of(self.whole_chain(season=season))["tvsn"], [season]
+                )
+
+    def test_no_episode_number_no_atom(self):
+        self.assertNotIn("tves", tags_of(self.whole_chain()))
+
+    def test_the_numbers_are_four_byte_integers(self):
+        path = tiny_mp4(os.path.join(self.temp, "abc.mp4"), {"title": "Old"})
+        info = self.video_stage(self.video_info())
+        info.update(ext="mp4", filepath=path, __real_download=True, episode_number=268)
+        _ = self.run_through(self.ydl(), new_file_atom_pp(self.ydl()), info)
+        raw = self.read(path)
+        for name, number in ((b"tves", 268), (b"tvsn", 1)):
+            start = raw.index(name)
+            # size, name, data atom (size, "data", type 21 = integer, locale)
+            data = raw[start + 4 : start + 4 + 8 + 8 + 4]
+            self.assertEqual(data[4:8], b"data")
+            self.assertEqual(int.from_bytes(data[-4:], "big"), number, name)
+
+    def test_other_numbers_stay_as_they_were(self):
+        tags = tags_of(self.whole_chain(episode=268))
+        self.assertEqual(tags["stik"], [10])
+        self.assertEqual(tags["hdvd"], [2])
+        self.assertEqual(tags["tven"], ["abc"])
+        self.assertEqual(tags["rtng"], [1])
 
     def test_meta_names_map_to_the_right_atoms(self):
         # What FFmpegMetadataPP does with the meta_* fields, by hand
